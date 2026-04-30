@@ -46,7 +46,7 @@ Apply the same skeleton to every member. Do **not** add package-specific tooling
 
 - [x] 5.1 Author `.editorconfig` covering file types `deno fmt` does not format (e.g., shell scripts, Dockerfiles, `.env.example`): UTF-8, LF line endings, final newline, trim trailing whitespace, indent style and size
 - [x] 5.2 Author `.gitignore` at the repo root covering: `.DS_Store`, `Thumbs.db`, editor directories (`.vscode/`, `.idea/`), `.env` and `.env.local`, any optional repo-local `DENO_DIR` (`.deno-cache/`), build output directories (`dist/`, `build/`), and coverage artefacts
-- [ ] 5.3 After running `deno install` and `deno task build` on a clean working tree, confirm `git status` reports no untracked or modified files
+- [x] 5.3 After running `deno install` and `deno task build` on a clean working tree, confirm `git status` reports no untracked or modified files — verified post-commit on `main` at `6396cf4`: both commands exit `0` and `git status` reports `nothing to commit, working tree clean`
 
 ## 6. README
 
@@ -70,11 +70,11 @@ Apply the same skeleton to every member. Do **not** add package-specific tooling
 - [x] 8.3 Deliberate `no-unused-vars` violation in `packages/shared/src/main.ts` caused `deno task lint` to exit non-zero and name the offending file and line; reverted
 - [x] 8.4 Deliberate wrong-value `Deno.test` assertion in `packages/server/src/main_test.ts` caused `deno task test` to exit non-zero with 4 passed / 1 failed; reverted
 - [x] 8.5 Removed a space from `packages/cli/src/main.ts`; `deno task fmt:check` exited non-zero naming the file, `deno task fmt` rewrote it, `deno task fmt:check` returned to green
-- [ ] 8.6 Temporarily edit a `deno.json` import map and push; confirm CI's `deno install --frozen` step fails with a lockfile-mismatch message, then revert and push again to confirm CI returns to green
-- [ ] 8.7 Push the initial commit(s) to `origin main` and open a dummy pull request (or confirm via a throwaway branch); confirm the CI workflow runs, every step passes, and the PR shows a green check
+- [x] 8.6 Temporarily edit a `deno.json` import map and push; confirm CI's `deno install --frozen` step fails with a lockfile-mismatch message, then revert and push again to confirm CI returns to green — verified via throwaway branch `verify/ci-frozen-lockfile` / PR #1 (since closed and branch deleted). Adding `"chalk": "npm:chalk@^5"` to imports without regenerating the lockfile caused CI to fail at the install step with `error: The lockfile is out of date. Run `deno install --frozen=false`...`; later steps (fmt:check, lint, check, test) were skipped. The positive case (sync lockfile → green CI) is the run against `main` at `6396cf4` (9 seconds, all 8 steps ✓).
+- [x] 8.7 Push the initial commit(s) to `origin main` and open a dummy pull request (or confirm via a throwaway branch); confirm the CI workflow runs, every step passes, and the PR shows a green check — `main` now carries three commits (`43d4b41` empty initial, `e6d1ba4` planning artefacts, `6396cf4` scaffolding); CI run `25177832594` on the push finished green in 9 seconds
 
 ## 9. Hand-off
 
-- [ ] 9.1 Cross-reference every requirement in `specs/developer-setup/spec.md` against the implemented state and confirm each scenario passes against the fresh clone
-- [ ] 9.2 Do not touch `initial-implementation-plan/README.md` unless a dependency changed during implementation; this change is strictly additive
-- [ ] 9.3 Note in the change archive readiness that step 02 (`storage-abstractions-and-file-impls`) is now unblocked
+- [x] 9.1 Cross-reference every requirement in `specs/developer-setup/spec.md` against the implemented state and confirm each scenario passes against the fresh clone — walked all 8 requirements; every scenario satisfied by the landed state (fresh clone → green build, unified tasks, reproducible installs with `--frozen`, CI enforcement including negative case, five-package layout with `@keni/*` scope and bare-specifier resolution, hygiene files present, README onboarding + SPA note, no filesystem prompts directory)
+- [x] 9.2 Do not touch `initial-implementation-plan/README.md` unless a dependency changed during implementation; this change is strictly additive — confirmed unchanged
+- [x] 9.3 Note in the change archive readiness that step 02 (`storage-abstractions-and-file-impls`) is now unblocked — recorded here: the Deno monorepo, workspace tooling, hygiene, README, and CI are in place; step 02 can begin introducing storage interfaces and file-backed default implementations into `packages/shared/` (and supporting tests) on top of this baseline. All further steps 02 – 27 in the implementation plan are likewise unblocked by this change.
