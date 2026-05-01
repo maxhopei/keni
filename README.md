@@ -66,6 +66,14 @@ The first run also calls `git init` if needed and stages a single initial commit
 project re-runs as a no-op (`already initialised`); a partial state (e.g., `.keni/tickets/` deleted)
 is repaired in place. The `project_id` is stable across re-runs and across project-folder renames.
 
+When `keni init` runs on a host where neither `user.name` nor `user.email` is configured in any git
+layer (per-repo, per-user `~/.gitconfig`, XDG, or system), the initial commit is attributed to
+`Keni <keni@example.invalid>` so the run can complete non-interactively (e.g. on a fresh CI runner).
+To commit under your own identity, configure git first — `git config --global user.name "Your Name"`
+and `git config --global user.email "you@example.com"` — or amend afterwards with
+`git commit --amend --reset-author`. The fallback is per-invocation and never writes any persistent
+git config.
+
 The on-disk contract is formalised in the
 [`project-layout` capability spec](./openspec/changes/project-and-global-layout-with-init/specs/project-layout/spec.md)
 (active until archived). Once archived, the canonical reference moves to

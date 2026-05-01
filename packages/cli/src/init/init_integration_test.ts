@@ -54,6 +54,41 @@ async function withEnv(fn: (env: TestEnv) => Promise<void>): Promise<void> {
   }
 }
 
+/**
+ * `withEnv` plus strict git identity isolation — exists specifically to
+ * reproduce the CI runner's identity-less environment so the `git.ts`
+ * fallback path is exercised regardless of the host's `~/.gitconfig`.
+ *
+ * Sets `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null`, and
+ * `HOME=<env.home>` (the temp home `withEnv` already created) for the
+ * duration of `fn`; subprocesses spawned during `runInit` inherit these so
+ * git's identity-resolution chain finds nothing in any layer above per-repo
+ * config. Every env-var change is restored in `finally`. POSIX-only —
+ * matches `git_test.ts :: withTempRepoIdentityIsolated`.
+ */
+async function withGitIdentityIsolated(
+  fn: (env: TestEnv) => Promise<void>,
+): Promise<void> {
+  await withEnv(async (env) => {
+    const previous = {
+      GIT_CONFIG_GLOBAL: Deno.env.get("GIT_CONFIG_GLOBAL"),
+      GIT_CONFIG_SYSTEM: Deno.env.get("GIT_CONFIG_SYSTEM"),
+      HOME: Deno.env.get("HOME"),
+    };
+    Deno.env.set("GIT_CONFIG_GLOBAL", "/dev/null");
+    Deno.env.set("GIT_CONFIG_SYSTEM", "/dev/null");
+    Deno.env.set("HOME", env.home);
+    try {
+      await fn(env);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) Deno.env.delete(key);
+        else Deno.env.set(key, value);
+      }
+    }
+  });
+}
+
 async function configureGitInRepo(repoDir: string): Promise<void> {
   for (
     const args of [
@@ -90,6 +125,18 @@ async function gitStatusPorcelain(repoDir: string): Promise<string> {
   });
   const out = await proc.output();
   return new TextDecoder().decode(out.stdout);
+}
+
+async function gitLogFormat(repoDir: string, format: string): Promise<string> {
+  const proc = new Deno.Command("git", {
+    args: ["log", "-1", `--format=${format}`],
+    cwd: repoDir,
+    stdout: "piped",
+    stderr: "null",
+  });
+  const out = await proc.output();
+  if (out.code !== 0) throw new Error(`git log -1 --format=${format} failed in ${repoDir}`);
+  return new TextDecoder().decode(out.stdout).trim();
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -407,6 +454,45 @@ itGit("subsequent runs preserve a pre-existing global config", async () => {
     }
   });
 });
+
+itGit(
+  "produces a Keni-fallback initial commit when no git identity is configured",
+  async () => {
+    await withGitIdentityIsolated(async (env) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const code = await runInit({ targetDir: env.root }, {
+        homeDir: env.home,
+        out: (m) => stdout.push(m),
+        err: (m) => stderr.push(m),
+      });
+      assertEquals(
+        code,
+        0,
+        `runInit failed under identity-less env; stderr=${stderr.join("\n")}`,
+      );
+
+      // Exactly one commit, attributed to the documented Keni fallback.
+      const log = await gitLog(env.root);
+      assertEquals(log.length, 1, `expected one commit, got: ${log.join(" / ")}`);
+      assert(
+        log[0]?.includes("Initialise Keni project"),
+        `commit subject should start with "Initialise Keni project", got: ${log[0]}`,
+      );
+      assertEquals(
+        await gitLogFormat(env.root, "%an <%ae>"),
+        "Keni <keni@example.invalid>",
+      );
+      assertEquals(
+        await gitLogFormat(env.root, "%cn <%ce>"),
+        "Keni <keni@example.invalid>",
+      );
+
+      // Working tree clean — every created file is committed or ignored.
+      assertEquals(await gitStatusPorcelain(env.root), "");
+    });
+  },
+);
 
 Deno.test("parseInitArgs — too many positional args throws UsageError", () => {
   let threw = false;
