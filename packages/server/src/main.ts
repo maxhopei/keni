@@ -44,6 +44,9 @@ export type { EventBus, EventBusHandler } from "./eventBus.ts";
 export { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
 export type { AgentRuntimeState, AgentRuntimeStateStore } from "./agentState.ts";
 
+export { createMcpServer, McpHttpError, runMcpServer } from "./mcp/main.ts";
+export type { McpHttpClient, McpServerDeps } from "./mcp/main.ts";
+
 if (import.meta.main) {
   const { runServer } = await import("./runServer.ts");
   Deno.exit(await runServer(Deno.args));

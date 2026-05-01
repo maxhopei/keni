@@ -11,7 +11,9 @@ import {
   createInMemoryAgentRuntimeStateStore,
   createInMemoryEventBus,
   createServer,
+  McpHttpError,
   packageName,
+  runMcpServer,
   runServer,
 } from "./main.ts";
 
@@ -55,4 +57,10 @@ Deno.test("@keni/server's runServer returns exit 2 on an unknown flag", async ()
   const errLines: string[] = [];
   const code = await runServer(["--bogus-flag"], { out: () => {}, err: (m) => errLines.push(m) });
   assertEquals(code, 2);
+});
+
+Deno.test("@keni/server re-exports the MCP-server surface (runMcpServer, McpHttpError)", () => {
+  assertEquals(typeof runMcpServer, "function");
+  assertEquals(typeof McpHttpError, "function");
+  assert(McpHttpError.prototype instanceof Error);
 });

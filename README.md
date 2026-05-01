@@ -146,6 +146,29 @@ The full HTTP contract — endpoints, wire shapes, error envelope, role rules, a
 taxonomy, and WS lifecycle — lives in the
 [`orchestration-server` capability spec](./openspec/changes/agents-api-and-websocket/specs/orchestration-server/spec.md).
 
+### Run the engineer MCP server (development only)
+
+`@keni/server` also ships a stdio-only MCP server that exposes a tightly scoped engineer toolset
+(seven tools — list / read / update-body / transition tickets, append / query activity, get
+workspace path) over the [Model Context Protocol](https://modelcontextprotocol.io). It is a thin
+adapter that delegates every tool call to the orchestration server's REST surface; it never reads or
+writes `.keni/` directly. Run it with the orchestration server already listening:
+
+```bash
+deno run -A packages/server/src/mcp/main.ts \
+  --agent alice \
+  --server-url http://127.0.0.1:<port> \
+  --workspace "$HOME/.keni/workspaces/<project-id>/alice"
+```
+
+All three flags are required. `--agent` must match `/^[a-z0-9_-]+$/` (the orchestration server
+identifies the caller via the closure-captured agent id, not via tool input — defense-in-depth
+against an agent claiming to be someone else inside a tool call). `--workspace` must be an existing
+directory; the value is what `get_workspace_path` returns. Step 07 (`role-runtime-and-workspace`)
+wires this invocation into the engineer subprocess's `mcpServers` config block — until then,
+developers attach a manual MCP client (e.g. the SDK's `mcp-cli` debugger or a coding-agent CLI's MCP
+debug mode) to exercise the surface.
+
 ## Repository layout
 
 ```
@@ -163,7 +186,7 @@ keni/
 ├── initial-implementation-plan/  # step-by-step /opsx:propose inputs (prototype → MVP)
 └── packages/
     ├── cli/                  # @keni/cli — the `keni` command, project init and server boot
-    ├── server/               # @keni/server — orchestration server, REST + WebSocket APIs, MCP surface
+    ├── server/               # @keni/server — orchestration server (REST + WebSocket APIs) and engineer MCP server (stdio)
     ├── spa/                  # @keni/spa — browser dashboard (board, agent roster, chat, spec viewer)
     ├── role-runtimes/        # @keni/role-runtimes — thin subprocess wrappers per role (PO, engineer, QA, writer)
     └── shared/               # @keni/shared — types, storage interfaces, utilities
