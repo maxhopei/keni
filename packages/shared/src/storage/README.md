@@ -43,6 +43,14 @@ to change too. zod schemas for the request shapes live server-side in `packages/
 consumers that only need the types (e.g., the SPA) import from `@keni/shared` and tree-shake zod out
 of their bundle.
 
+**Events are wire-only.** The orchestration server's WebSocket `/events` endpoint emits an
+`EventFrame` (`{ id, event, project_id, timestamp, payload }`) per write — but no on-disk artifact
+corresponds to an event. The durable record of agent activity remains the **activity log**
+(`ActivityLogStore`); events are a derived live channel that the SPA, MCP push-channel, and future
+replay subscribers consume in addition to (not instead of) the activity log on disk. A future change
+can ring-buffer events for `?since=<event-id>` replay without touching this module — the wire shape
+carries the uuidv7 `id` precisely so that change is additive.
+
 Each interface has two implementations:
 
 - **`FileXStore`** — production default. Reads / writes the on-disk layout documented above.

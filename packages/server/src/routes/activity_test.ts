@@ -11,10 +11,17 @@ import { join } from "@std/path";
 import {
   type ActivityEnvelope,
   type ActivityQueryResponse,
+  type AgentConfig,
   type ErrorResponse,
+  type EventFrame,
   FileActivityLogStore,
   resolveProjectPaths,
 } from "@keni/shared";
+import {
+  type AgentRuntimeStateStore,
+  createInMemoryAgentRuntimeStateStore,
+} from "../agentState.ts";
+import { captureBusBuffer, createInMemoryEventBus } from "../eventBus.ts";
 import { errorBoundary } from "../middleware/errorBoundary.ts";
 import { roleIdentity } from "../middleware/roleIdentity.ts";
 import type { ServerVariables } from "../middleware/types.ts";
@@ -23,24 +30,36 @@ import { activityRoutes } from "./activity.ts";
 const PROJECT_ID = "project-test";
 const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const ROSTER: readonly AgentConfig[] = [{ id: "alice", role: "engineer" }];
+
 interface TestContext {
   readonly app: Hono<{ Variables: ServerVariables }>;
   readonly store: FileActivityLogStore;
+  readonly agentStateStore: AgentRuntimeStateStore;
+  readonly buffer: EventFrame[];
   readonly root: string;
   readonly cleanup: () => Promise<void>;
 }
 
-async function makeTestApp(): Promise<TestContext> {
+async function makeTestApp(
+  roster: readonly AgentConfig[] = ROSTER,
+): Promise<TestContext> {
   const root = await Deno.makeTempDir({ prefix: "keni-server-activity-" });
   const paths = resolveProjectPaths(root);
   const store = new FileActivityLogStore(paths);
+  const agentStateStore = createInMemoryAgentRuntimeStateStore(roster);
+  const bus = createInMemoryEventBus();
+  const { buffer, subscribe } = captureBusBuffer();
+  subscribe(bus);
   const app = new Hono<{ Variables: ServerVariables }>();
   app.use(roleIdentity());
   app.onError(errorBoundary(PROJECT_ID));
-  app.route("/activity", activityRoutes(store, PROJECT_ID));
+  app.route("/activity", activityRoutes(store, agentStateStore, bus, PROJECT_ID));
   return {
     app,
     store,
+    agentStateStore,
+    buffer,
     root,
     cleanup: () => Deno.remove(root, { recursive: true }),
   };
@@ -259,6 +278,108 @@ Deno.test("POST /activity with an unknown body field → 400 validation_failed (
     assertEquals(res.status, 400);
     const body = (await res.json()) as ErrorResponse;
     assertEquals(body.error.code, "validation_failed");
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /activity emits one activity.appended frame", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/activity", {
+        method: "POST",
+        role: "engineer",
+        body: VALID_APPEND_BODY,
+      }),
+    );
+    assertEquals(res.status, 201);
+    const body = (await res.json()) as ActivityEnvelope;
+    const appended = ctx.buffer.filter((f) => f.event === "activity.appended");
+    assertEquals(appended.length, 1);
+    assertMatch(appended[0]!.id, UUIDV7_RE);
+    assertEquals(appended[0]!.project_id, PROJECT_ID);
+    assertEquals(appended[0]!.payload, {
+      entry_id: body.data.id,
+      agent: "alice",
+      role: "engineer",
+      event: "session_start",
+    });
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /activity with session_start emits agent.state_changed and updates the runtime store", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/activity", {
+        method: "POST",
+        role: "engineer",
+        body: VALID_APPEND_BODY,
+      }),
+    );
+    assertEquals(res.status, 201);
+    assertEquals(ctx.buffer.length, 2);
+    assertEquals(ctx.buffer[0]!.event, "activity.appended");
+    assertEquals(ctx.buffer[1]!.event, "agent.state_changed");
+    assertEquals(ctx.buffer[1]!.payload, {
+      agent_id: "alice",
+      paused: false,
+      status: "running",
+    });
+    const snapshot = ctx.agentStateStore.read("alice");
+    assertEquals(snapshot.status, "running");
+    assertEquals(snapshot.last_activity, "session_start");
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /activity with a non-state-changing event emits only activity.appended", async () => {
+  const ctx = await makeTestApp();
+  try {
+    await ctx.app.fetch(
+      authedRequest("http://x/activity", {
+        method: "POST",
+        role: "engineer",
+        body: VALID_APPEND_BODY,
+      }),
+    );
+    ctx.buffer.length = 0;
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/activity", {
+        method: "POST",
+        role: "engineer",
+        body: { ...VALID_APPEND_BODY, event: "summary", summary: "still going" },
+      }),
+    );
+    assertEquals(res.status, 201);
+    assertEquals(ctx.buffer.length, 1);
+    assertEquals(ctx.buffer[0]!.event, "activity.appended");
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /activity with an unknown agent emits only activity.appended", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/activity", {
+        method: "POST",
+        role: "engineer",
+        body: { ...VALID_APPEND_BODY, agent: "ghost" },
+      }),
+    );
+    assertEquals(res.status, 201);
+    assertEquals(ctx.buffer.length, 1);
+    assertEquals(ctx.buffer[0]!.event, "activity.appended");
+    assert(
+      !ctx.agentStateStore.list().some((s) => s.id === "ghost"),
+      "unknown agent must not be added to the runtime store",
+    );
   } finally {
     await ctx.cleanup();
   }

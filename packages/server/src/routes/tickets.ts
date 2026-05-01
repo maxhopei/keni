@@ -38,6 +38,7 @@ import type {
 } from "@keni/shared";
 import { z } from "zod";
 import { RoleNotOwnerError, StatusGraphViolationError } from "../errors.ts";
+import { emitFrame, type EventBus } from "../eventBus.ts";
 import { isTicketRoleOwner, isTicketTransitionReachable } from "../statusGraph.ts";
 import {
   TicketCreateRequestSchema,
@@ -51,9 +52,11 @@ import type { ServerVariables } from "../middleware/types.ts";
 const TICKET_CREATE_OWNERS: readonly Role[] = ["user", "engineer"];
 
 /** Build the `/tickets` sub-app. */
-export function ticketsRoutes(store: TicketStore, projectId: string): Hono<{
-  Variables: ServerVariables;
-}> {
+export function ticketsRoutes(
+  store: TicketStore,
+  bus: EventBus,
+  projectId: string,
+): Hono<{ Variables: ServerVariables }> {
   const app = new Hono<{ Variables: ServerVariables }>();
 
   app.get("/", async (c) => {
@@ -75,6 +78,10 @@ export function ticketsRoutes(store: TicketStore, projectId: string): Hono<{
     assertRoleCanCreateTicket(c.var.role);
     const input = TicketCreateRequestSchema.parse(await c.req.json());
     const ticket = await store.create(input as TicketCreateInput);
+    emitFrame(bus, projectId, "ticket.created", {
+      ticket_id: ticket.header.id,
+      status: ticket.header.status,
+    });
     return c.json(toTicketEnvelope(ticket, projectId), 201);
   });
 
@@ -92,6 +99,11 @@ export function ticketsRoutes(store: TicketStore, projectId: string): Hono<{
     if (ticket === undefined) {
       ticket = await store.read(id);
     }
+    emitFrame(bus, projectId, "ticket.updated", {
+      ticket_id: ticket.header.id,
+      status: ticket.header.status,
+      kind: "patch",
+    });
     return c.json(toTicketEnvelope(ticket, projectId));
   });
 
@@ -107,6 +119,11 @@ export function ticketsRoutes(store: TicketStore, projectId: string): Hono<{
     const ticket = await store.transitionStatus(id, from, to);
     // TODO(step-25): when c.var.role === "user", append a `manual_override`
     // entry to the activity log here, capturing { ticket: id, from, to }.
+    emitFrame(bus, projectId, "ticket.updated", {
+      ticket_id: ticket.header.id,
+      status: ticket.header.status,
+      kind: "transition",
+    });
     return c.json(toTicketEnvelope(ticket, projectId));
   });
 

@@ -94,12 +94,49 @@ curl -H "X-Keni-Role: user" http://127.0.0.1:<port>/tickets
 # => { "data": [], "project_id": "<uuid>" }
 ```
 
+The agent roster joined to runtime state is at `GET /agents`:
+
+```bash
+curl -H "X-Keni-Role: user" http://127.0.0.1:<port>/agents
+# => { "data": [
+#       { "id": "alice", "role": "engineer", "status": "idle",
+#         "last_activity": null, "last_active_at": null, "paused": false }
+#      ], "project_id": "<uuid>" }
+```
+
+`POST /agents/:id/pause` and `POST /agents/:id/resume` flip the `paused` flag (user-only, idempotent
+— they emit `agent.state_changed` only when the flag actually changes). The flag is the seam
+consumed by step 08's scheduler; until that lands, paused agents are flagged but not yet gated.
+
+A live event stream is at `GET /events` (WebSocket). Every successful write on `/tickets`, `/prs`,
+`/activity`, and `/agents/:id/{pause,resume}` is mirrored to every connected subscriber as one
+`EventFrame` (`{ id (uuidv7), event, project_id, timestamp, payload }`). Two equivalent
+authentication paths are accepted on the upgrade — the role header (preferred for CLI tools) or the
+`?role=<role>` query parameter (browsers cannot set arbitrary headers on `new WebSocket(...)`):
+
+```bash
+# CLI tool (websocat / curl-style):
+websocat -H 'X-Keni-Role: user' ws://127.0.0.1:<port>/events
+
+# Browser-friendly:
+ws://127.0.0.1:<port>/events?role=user
+```
+
+The server sends a protocol-level WS ping after 25 seconds of idle and closes the connection with
+code 1011 if the client does not pong before the next idle window — a missed-pong tear-down modelled
+at the protocol level so the application-event channel stays push-only. **Persistence tier (today):
+in-memory.** Pause / resume flags, agent runtime status, and the event bus all reset on server
+restart; the activity log on disk remains the durable record. Reconnect strategy: the client
+re-fetches the canonical state from REST on each reconnect (`?since=<event-id>` replay is a
+forward-compatible additive change documented in the capability spec).
+
 Step 13 (`cli-start-and-end-to-end-wiring`) folds this invocation into a `keni start` subcommand
 that handles signal management, `~/.keni/logs/server-YYYY-MM-DD.jsonl` log routing, and (later)
 process supervision; `runServer` is already the dispatch target so that change is one line.
 
-The full HTTP contract — endpoints, wire shapes, error envelope, role rules — lives in the
-[`orchestration-server` capability spec](./openspec/changes/orchestration-server-and-rest-apis/specs/orchestration-server/spec.md).
+The full HTTP contract — endpoints, wire shapes, error envelope, role rules, agent roster, event
+taxonomy, and WS lifecycle — lives in the
+[`orchestration-server` capability spec](./openspec/changes/agents-api-and-websocket/specs/orchestration-server/spec.md).
 
 ## Repository layout
 

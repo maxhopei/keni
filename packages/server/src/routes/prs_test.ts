@@ -5,24 +5,28 @@
  */
 
 import { Hono } from "@hono/hono";
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertMatch } from "@std/assert";
 import {
   type ErrorResponse,
+  type EventFrame,
   FilePRStore,
   type PREnvelope,
   type PRListResponse,
   resolveProjectPaths,
 } from "@keni/shared";
+import { captureBusBuffer, createInMemoryEventBus } from "../eventBus.ts";
 import { errorBoundary } from "../middleware/errorBoundary.ts";
 import { roleIdentity } from "../middleware/roleIdentity.ts";
 import type { ServerVariables } from "../middleware/types.ts";
 import { prsRoutes } from "./prs.ts";
 
 const PROJECT_ID = "project-test";
+const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface TestContext {
   readonly app: Hono<{ Variables: ServerVariables }>;
   readonly store: FilePRStore;
+  readonly buffer: EventFrame[];
   readonly cleanup: () => Promise<void>;
 }
 
@@ -30,13 +34,17 @@ async function makeTestApp(): Promise<TestContext> {
   const root = await Deno.makeTempDir({ prefix: "keni-server-prs-" });
   const paths = resolveProjectPaths(root);
   const store = new FilePRStore(paths);
+  const bus = createInMemoryEventBus();
+  const { buffer, subscribe } = captureBusBuffer();
+  subscribe(bus);
   const app = new Hono<{ Variables: ServerVariables }>();
   app.use(roleIdentity());
   app.onError(errorBoundary(PROJECT_ID));
-  app.route("/prs", prsRoutes(store, PROJECT_ID));
+  app.route("/prs", prsRoutes(store, bus, PROJECT_ID));
   return {
     app,
     store,
+    buffer,
     cleanup: () => Deno.remove(root, { recursive: true }),
   };
 }
@@ -264,6 +272,83 @@ Deno.test("GET /prs?ticket=ticket-0001&status=open filters", async () => {
     const body = (await res.json()) as PRListResponse;
     assertEquals(body.data.length, 1);
     assertEquals(body.data[0]!.ticket, "ticket-0001");
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /prs emits one pr.created frame", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/prs", {
+        method: "POST",
+        role: "engineer",
+        body: VALID_PR_INPUT,
+      }),
+    );
+    assertEquals(res.status, 201);
+    const body = (await res.json()) as PREnvelope;
+    assertEquals(ctx.buffer.length, 1);
+    const frame = ctx.buffer[0]!;
+    assertEquals(frame.event, "pr.created");
+    assertMatch(frame.id, UUIDV7_RE);
+    assertEquals(frame.project_id, PROJECT_ID);
+    assertEquals(frame.payload, {
+      pr_id: body.data.id,
+      status: "open",
+      ticket: VALID_PR_INPUT.ticket,
+    });
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("PATCH /prs/:id/intent emits one pr.updated with kind: intent", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const created = await ctx.store.create({ ...VALID_PR_INPUT, body: "before" });
+    const res = await ctx.app.fetch(
+      authedRequest(`http://x/prs/${created.header.id}/intent`, {
+        method: "PATCH",
+        role: "engineer",
+        body: { intent: "after" },
+      }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(ctx.buffer.length, 1);
+    const frame = ctx.buffer[0]!;
+    assertEquals(frame.event, "pr.updated");
+    assertEquals(frame.payload, {
+      pr_id: created.header.id,
+      status: "open",
+      kind: "intent",
+    });
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /prs/:id/transition emits one pr.updated with kind: transition", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const created = await ctx.store.create(VALID_PR_INPUT);
+    const res = await ctx.app.fetch(
+      authedRequest(`http://x/prs/${created.header.id}/transition`, {
+        method: "POST",
+        role: "engineer",
+        body: { from: "open", to: "in_review" },
+      }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(ctx.buffer.length, 1);
+    const frame = ctx.buffer[0]!;
+    assertEquals(frame.event, "pr.updated");
+    assertEquals(frame.payload, {
+      pr_id: created.header.id,
+      status: "in_review",
+      kind: "transition",
+    });
   } finally {
     await ctx.cleanup();
   }

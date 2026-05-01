@@ -5,25 +5,32 @@
  */
 
 import { Hono } from "@hono/hono";
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertMatch } from "@std/assert";
 import {
+  type EventFrame,
   FileTicketStore,
   resolveProjectPaths,
   type TicketEnvelope,
   type TicketListResponse,
   type TicketResponse,
 } from "@keni/shared";
+import { captureBusBuffer, createInMemoryEventBus, type EventBus } from "../eventBus.ts";
+import { captureLogSink } from "../middleware/requestLog.ts";
 import { errorBoundary } from "../middleware/errorBoundary.ts";
 import { roleIdentity } from "../middleware/roleIdentity.ts";
-import type { ServerVariables } from "../middleware/types.ts";
+import type { RequestLogLine, ServerVariables } from "../middleware/types.ts";
 import { ticketsRoutes } from "./tickets.ts";
 import type { ErrorResponse } from "@keni/shared";
 
 const PROJECT_ID = "project-test";
+const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface TestContext {
   readonly app: Hono<{ Variables: ServerVariables }>;
   readonly store: FileTicketStore;
+  readonly bus: EventBus;
+  readonly buffer: EventFrame[];
+  readonly logBuffer: RequestLogLine[];
   readonly cleanup: () => Promise<void>;
 }
 
@@ -31,13 +38,20 @@ async function makeTestApp(): Promise<TestContext> {
   const root = await Deno.makeTempDir({ prefix: "keni-server-tickets-" });
   const paths = resolveProjectPaths(root);
   const store = new FileTicketStore(paths);
+  const logBuffer: RequestLogLine[] = [];
+  const bus = createInMemoryEventBus({ logSink: captureLogSink(logBuffer) });
+  const { buffer, subscribe } = captureBusBuffer();
+  subscribe(bus);
   const app = new Hono<{ Variables: ServerVariables }>();
   app.use(roleIdentity());
   app.onError(errorBoundary(PROJECT_ID));
-  app.route("/tickets", ticketsRoutes(store, PROJECT_ID));
+  app.route("/tickets", ticketsRoutes(store, bus, PROJECT_ID));
   return {
     app,
     store,
+    bus,
+    buffer,
+    logBuffer,
     cleanup: () => Deno.remove(root, { recursive: true }),
   };
 }
@@ -374,6 +388,126 @@ Deno.test("GET /tickets?priorityMin=abc → 400 validation_failed", async () => 
     assertEquals(res.status, 400);
     const body = (await res.json()) as ErrorResponse;
     assertEquals(body.error.code, "validation_failed");
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /tickets emits one ticket.created frame", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/tickets", {
+        method: "POST",
+        role: "user",
+        body: { title: "first ticket", priority: 100 },
+      }),
+    );
+    assertEquals(res.status, 201);
+    const body = (await res.json()) as TicketEnvelope;
+    assertEquals(ctx.buffer.length, 1);
+    const frame = ctx.buffer[0]!;
+    assertEquals(frame.event, "ticket.created");
+    assertMatch(frame.id, UUIDV7_RE);
+    assertEquals(frame.project_id, PROJECT_ID);
+    assertMatch(frame.timestamp, /^\d{4}-\d{2}-\d{2}T/);
+    assertEquals(frame.payload, { ticket_id: body.data.id, status: "open" });
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("PATCH /tickets/:id emits one ticket.updated with kind: patch", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const created = await ctx.store.create({ title: "before", priority: 100 });
+    const res = await ctx.app.fetch(
+      authedRequest(`http://x/tickets/${created.header.id}`, {
+        method: "PATCH",
+        role: "user",
+        body: { title: "after" },
+      }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(ctx.buffer.length, 1);
+    const frame = ctx.buffer[0]!;
+    assertEquals(frame.event, "ticket.updated");
+    assertEquals(frame.payload, {
+      ticket_id: created.header.id,
+      status: "open",
+      kind: "patch",
+    });
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("POST /tickets/:id/transition emits one ticket.updated with kind: transition", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const created = await ctx.store.create({ title: "x", priority: 100 });
+    const res = await ctx.app.fetch(
+      authedRequest(`http://x/tickets/${created.header.id}/transition`, {
+        method: "POST",
+        role: "engineer",
+        body: { from: "open", to: "in_progress" },
+      }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(ctx.buffer.length, 1);
+    const frame = ctx.buffer[0]!;
+    assertEquals(frame.event, "ticket.updated");
+    assertEquals(frame.payload, {
+      ticket_id: created.header.id,
+      status: "in_progress",
+      kind: "transition",
+    });
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("a throwing subscriber does not affect the response (route still 201)", async () => {
+  const ctx = await makeTestApp();
+  ctx.bus.subscribe(() => {
+    throw new Error("subscriber-kapow");
+  });
+  try {
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/tickets", {
+        method: "POST",
+        role: "user",
+        body: { title: "still-ok", priority: 100 },
+      }),
+    );
+    assertEquals(res.status, 201);
+    assertEquals(ctx.buffer.length, 1);
+    const subscriberFailureLines = ctx.logBuffer.filter((l) => l.path === "event_bus");
+    assertEquals(subscriberFailureLines.length, 1);
+    assert(
+      subscriberFailureLines[0]!.error_code?.startsWith(
+        "subscriber_failed:ticket.created:",
+      ),
+    );
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+Deno.test("a failed transition (stale_state) does not emit any frame", async () => {
+  const ctx = await makeTestApp();
+  try {
+    const created = await ctx.store.create({ title: "x", priority: 100 });
+    await ctx.store.transitionStatus(created.header.id, "open", "in_progress");
+    const res = await ctx.app.fetch(
+      authedRequest(`http://x/tickets/${created.header.id}/transition`, {
+        method: "POST",
+        role: "engineer",
+        body: { from: "open", to: "in_progress" },
+      }),
+    );
+    assertEquals(res.status, 409);
+    assertEquals(ctx.buffer.length, 0);
   } finally {
     await ctx.cleanup();
   }

@@ -6,7 +6,14 @@ import {
   InMemoryTicketStore,
   type TicketStore,
 } from "@keni/shared";
-import { captureLogSink, createServer, packageName, runServer } from "./main.ts";
+import {
+  captureLogSink,
+  createInMemoryAgentRuntimeStateStore,
+  createInMemoryEventBus,
+  createServer,
+  packageName,
+  runServer,
+} from "./main.ts";
 
 Deno.test("@keni/server exposes its package name", () => {
   assertEquals(packageName, "@keni/server");
@@ -30,6 +37,8 @@ Deno.test("@keni/server's createServer answers GET /tickets with in-memory store
       activityLogStore: new InMemoryActivityLogStore(),
       configStore: new InMemoryConfigStore(),
       logSink: captureLogSink([]),
+      eventBus: createInMemoryEventBus(),
+      agentRuntimeStateStore: createInMemoryAgentRuntimeStateStore([]),
     },
     { projectId: "smoke-project" },
   );

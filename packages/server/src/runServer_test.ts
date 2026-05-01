@@ -9,7 +9,9 @@ import { assertEquals, assertMatch } from "@std/assert";
 import { FileConfigStore, resolveGlobalPaths, resolveProjectPaths } from "@keni/shared";
 import { parseRunServerArgs, runServer, UsageError } from "./runServer.ts";
 
-async function makeKeniInitialised(): Promise<{ root: string; cleanup: () => Promise<void> }> {
+async function makeKeniInitialised(
+  agents: readonly { readonly id: string; readonly role: string }[] = [],
+): Promise<{ root: string; cleanup: () => Promise<void> }> {
   const root = await Deno.makeTempDir({ prefix: "keni-server-runserver-" });
   const home = await Deno.makeTempDir({ prefix: "keni-server-runserver-home-" });
   const projectPaths = resolveProjectPaths(root);
@@ -22,6 +24,7 @@ async function makeKeniInitialised(): Promise<{ root: string; cleanup: () => Pro
   await config.writeProjectConfig({
     project_id: "00000000-0000-4000-8000-000000000001",
     name: "test-project",
+    ...(agents.length > 0 ? { agents } : {}),
   });
   return {
     root,
@@ -123,6 +126,50 @@ Deno.test("runServer prints the bound URL and exits 0 on injected shutdown", asy
     assertEquals(res.status, 200);
     const body = await res.json();
     assertEquals(body.project_id, "00000000-0000-4000-8000-000000000001");
+
+    ctrl.abort();
+    const exit = await promise;
+    assertEquals(exit, 0);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("runServer seeds /agents from the project.yaml roster", async () => {
+  const env = await makeKeniInitialised([
+    { id: "alice", role: "engineer" },
+    { id: "bob", role: "qa" },
+  ]);
+  try {
+    const outLines: string[] = [];
+    const ctrl = new AbortController();
+    const promise = runServer(
+      ["--project", env.root, "--port", "0"],
+      { out: (m) => outLines.push(m), err: () => {}, shutdownSignal: ctrl.signal },
+    );
+    await waitFor(() => outLines.some((l) => l.startsWith("Keni server running at ")));
+    const banner = outLines.find((l) => l.startsWith("Keni server running at "))!;
+    const url = banner.replace(/^Keni server running at /, "");
+
+    const res = await fetch(`${url}/agents`, { headers: { "X-Keni-Role": "user" } });
+    assertEquals(res.status, 200);
+    const body = (await res.json()) as {
+      readonly project_id: string;
+      readonly data: readonly {
+        readonly id: string;
+        readonly role: string;
+        readonly status: string;
+        readonly paused: boolean;
+      }[];
+    };
+    assertEquals(body.project_id, "00000000-0000-4000-8000-000000000001");
+    assertEquals(body.data.length, 2);
+    assertEquals(body.data[0]!.id, "alice");
+    assertEquals(body.data[0]!.role, "engineer");
+    assertEquals(body.data[0]!.status, "idle");
+    assertEquals(body.data[0]!.paused, false);
+    assertEquals(body.data[1]!.id, "bob");
+    assertEquals(body.data[1]!.role, "qa");
 
     ctrl.abort();
     const exit = await promise;

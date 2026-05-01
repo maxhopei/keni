@@ -45,3 +45,19 @@ export type {
   ActivityEnvelope,
   ActivityQueryResponse,
 } from "./activity.ts";
+
+export type { AgentEnvelope, AgentListResponse, AgentResponse, AgentStatus } from "./agents.ts";
+export { AGENT_STATUSES, isAgentStatus } from "./agents.ts";
+
+export type {
+  ActivityAppendedPayload,
+  AgentStateChangedPayload,
+  EventEnvelope,
+  EventFrame,
+  EventName,
+  PRCreatedPayload,
+  PRUpdatedPayload,
+  TicketCreatedPayload,
+  TicketUpdatedPayload,
+} from "./events.ts";
+export { EVENT_NAMES, isEventName } from "./events.ts";

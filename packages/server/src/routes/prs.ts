@@ -26,6 +26,7 @@ import type {
 } from "@keni/shared";
 import { z } from "zod";
 import { RoleNotOwnerError, StatusGraphViolationError } from "../errors.ts";
+import { emitFrame, type EventBus } from "../eventBus.ts";
 import { isPRRoleOwner, isPRTransitionReachable } from "../statusGraph.ts";
 import {
   PRCreateRequestSchema,
@@ -53,9 +54,11 @@ const PRStatusListSchema = z.string().transform((raw, ctx) => {
 });
 
 /** Build the `/prs` sub-app. */
-export function prsRoutes(store: PRStore, projectId: string): Hono<{
-  Variables: ServerVariables;
-}> {
+export function prsRoutes(
+  store: PRStore,
+  bus: EventBus,
+  projectId: string,
+): Hono<{ Variables: ServerVariables }> {
   const app = new Hono<{ Variables: ServerVariables }>();
 
   app.get("/", async (c) => {
@@ -77,6 +80,11 @@ export function prsRoutes(store: PRStore, projectId: string): Hono<{
     assertRoleCanCreatePR(c.var.role);
     const input = PRCreateRequestSchema.parse(await c.req.json());
     const pr = await store.create(input as PRCreateInput);
+    emitFrame(bus, projectId, "pr.created", {
+      pr_id: pr.header.id,
+      status: pr.header.status,
+      ticket: pr.header.ticket,
+    });
     return c.json(toPREnvelope(pr, projectId), 201);
   });
 
@@ -84,6 +92,11 @@ export function prsRoutes(store: PRStore, projectId: string): Hono<{
     const id = c.req.param("id");
     const { intent } = PRIntentPatchRequestSchema.parse(await c.req.json());
     const pr = await store.updateIntent(id, intent);
+    emitFrame(bus, projectId, "pr.updated", {
+      pr_id: pr.header.id,
+      status: pr.header.status,
+      kind: "intent",
+    });
     return c.json(toPREnvelope(pr, projectId));
   });
 
@@ -99,6 +112,11 @@ export function prsRoutes(store: PRStore, projectId: string): Hono<{
     const pr = await store.updateStatus(id, from, to);
     // TODO(step-25): when c.var.role === "user", append a `manual_override`
     // entry to the activity log here, capturing { pr: id, from, to }.
+    emitFrame(bus, projectId, "pr.updated", {
+      pr_id: pr.header.id,
+      status: pr.header.status,
+      kind: "transition",
+    });
     return c.json(toPREnvelope(pr, projectId));
   });
 

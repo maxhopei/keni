@@ -36,6 +36,8 @@ import type {
   TicketStore,
 } from "@keni/shared";
 import { resolve } from "@std/path";
+import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
+import { createInMemoryEventBus } from "./eventBus.ts";
 import { stdoutLogSink } from "./middleware/requestLog.ts";
 import type { LogSink } from "./middleware/types.ts";
 import { startServer } from "./startServer.ts";
@@ -179,9 +181,11 @@ export async function runServer(
   };
 
   let projectId: string;
+  let roster: readonly { readonly id: string; readonly role: string }[];
   try {
     const config = await stores.configStore.readProjectConfig();
     projectId = config.project_id;
+    roster = config.agents ?? [];
   } catch (e) {
     if (e instanceof StoreNotFoundError) {
       err(
@@ -192,13 +196,19 @@ export async function runServer(
     throw e;
   }
 
+  const logSink = deps.logSink ?? stdoutLogSink();
+  const eventBus = createInMemoryEventBus({ logSink });
+  const agentRuntimeStateStore = createInMemoryAgentRuntimeStateStore(roster);
+
   const handle = await startServer(
     {
       ticketStore: stores.ticketStore,
       prStore: stores.prStore,
       activityLogStore: stores.activityLogStore,
       configStore: stores.configStore,
-      logSink: deps.logSink ?? stdoutLogSink(),
+      logSink,
+      eventBus,
+      agentRuntimeStateStore,
     },
     { projectId, port: parsed.port, host: parsed.host },
   );

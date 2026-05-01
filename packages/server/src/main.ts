@@ -38,6 +38,12 @@ export {
 } from "./middleware/mod.ts";
 export type { LogSink, RequestLogLine, ServerVariables } from "./middleware/mod.ts";
 
+export { captureBusBuffer, createInMemoryEventBus, emitFrame } from "./eventBus.ts";
+export type { EventBus, EventBusHandler } from "./eventBus.ts";
+
+export { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
+export type { AgentRuntimeState, AgentRuntimeStateStore } from "./agentState.ts";
+
 if (import.meta.main) {
   const { runServer } = await import("./runServer.ts");
   Deno.exit(await runServer(Deno.args));

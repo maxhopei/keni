@@ -11,6 +11,8 @@ import {
   InMemoryPRStore,
   InMemoryTicketStore,
 } from "@keni/shared";
+import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
+import { createInMemoryEventBus } from "./eventBus.ts";
 import { captureLogSink } from "./middleware/requestLog.ts";
 import { startServer } from "./startServer.ts";
 
@@ -21,6 +23,8 @@ function makeDeps() {
     activityLogStore: new InMemoryActivityLogStore(),
     configStore: new InMemoryConfigStore(),
     logSink: captureLogSink([]),
+    eventBus: createInMemoryEventBus(),
+    agentRuntimeStateStore: createInMemoryAgentRuntimeStateStore([]),
   };
 }
 

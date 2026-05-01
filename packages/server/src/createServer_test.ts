@@ -11,28 +11,44 @@
 import { Hono } from "@hono/hono";
 import { assert, assertEquals } from "@std/assert";
 import {
+  type AgentConfig,
+  type AgentListResponse,
   type ErrorResponse,
+  type EventFrame,
   InMemoryActivityLogStore,
   InMemoryConfigStore,
   InMemoryPRStore,
   InMemoryTicketStore,
   type TicketListResponse,
 } from "@keni/shared";
+import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
+import { captureBusBuffer, createInMemoryEventBus } from "./eventBus.ts";
 import { createServer, type ServerDeps } from "./createServer.ts";
 import { captureLogSink } from "./middleware/requestLog.ts";
 import type { RequestLogLine } from "./middleware/types.ts";
 
 const PROJECT_ID = "project-test";
 
-function makeDeps(): ServerDeps & { readonly buffer: RequestLogLine[] } {
+interface TestDeps extends ServerDeps {
+  readonly buffer: RequestLogLine[];
+  readonly busBuffer: EventFrame[];
+}
+
+function makeDeps(roster: readonly AgentConfig[] = []): TestDeps {
   const buffer: RequestLogLine[] = [];
+  const eventBus = createInMemoryEventBus();
+  const { buffer: busBuffer, subscribe } = captureBusBuffer();
+  subscribe(eventBus);
   return {
     ticketStore: new InMemoryTicketStore(),
     prStore: new InMemoryPRStore(),
     activityLogStore: new InMemoryActivityLogStore(),
     configStore: new InMemoryConfigStore(),
     logSink: captureLogSink(buffer),
+    eventBus,
+    agentRuntimeStateStore: createInMemoryAgentRuntimeStateStore(roster),
     buffer,
+    busBuffer,
   };
 }
 
@@ -114,4 +130,108 @@ Deno.test("createServer logs requests that fail role validation (requestLog befo
   assertEquals(body.error.code, "missing_role");
   assertEquals(deps.buffer.length, 1);
   assertEquals(deps.buffer[0]!.error_code, "missing_role");
+});
+
+Deno.test("createServer mounts /agents and returns the seeded roster", async () => {
+  const roster: readonly AgentConfig[] = [
+    { id: "alice", role: "engineer" },
+    { id: "bob", role: "qa" },
+  ];
+  const deps = makeDeps(roster);
+  const app = createServer(deps, { projectId: PROJECT_ID });
+  const res = await app.fetch(authedRequest("http://x/agents"));
+  assertEquals(res.status, 200);
+  const body = (await res.json()) as AgentListResponse;
+  assertEquals(body.project_id, PROJECT_ID);
+  assertEquals(body.data.length, 2);
+  assertEquals(body.data[0]!.id, "alice");
+  assertEquals(body.data[0]!.role, "engineer");
+  assertEquals(body.data[0]!.status, "idle");
+  assertEquals(body.data[0]!.paused, false);
+  assertEquals(body.data[1]!.id, "bob");
+});
+
+Deno.test("createServer mounts /events and returns 101 on a valid WS upgrade with ?role=user", async () => {
+  const deps = makeDeps();
+  const app = createServer(deps, { projectId: PROJECT_ID });
+  const res = await app.fetch(
+    new Request("http://x/events?role=user", {
+      headers: {
+        "Upgrade": "websocket",
+        "Connection": "Upgrade",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      },
+    }),
+  );
+  // The upgrade is accepted by Hono / Deno but the test harness sees a
+  // synthetic Response — the status reflects whether the upgrade was
+  // attempted (101) vs. refused (400 / 4xx). On a valid handshake the
+  // `Deno.upgradeWebSocket` code path returns a 101.
+  assertEquals(res.status, 101);
+});
+
+Deno.test("createServer's /events refuses an upgrade with no role (400 missing_role)", async () => {
+  const deps = makeDeps();
+  const app = createServer(deps, { projectId: PROJECT_ID });
+  const res = await app.fetch(
+    new Request("http://x/events", {
+      headers: {
+        "Upgrade": "websocket",
+        "Connection": "Upgrade",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      },
+    }),
+  );
+  assertEquals(res.status, 400);
+  const body = (await res.json()) as ErrorResponse;
+  assertEquals(body.error.code, "missing_role");
+});
+
+Deno.test("createServer's REST endpoints do NOT accept the ?role= query parameter (only /events does)", async () => {
+  const deps = makeDeps();
+  const app = createServer(deps, { projectId: PROJECT_ID });
+  const res = await app.fetch(new Request("http://x/tickets?role=user"));
+  assertEquals(res.status, 400);
+  const body = (await res.json()) as ErrorResponse;
+  assertEquals(body.error.code, "missing_role");
+});
+
+Deno.test("a successful POST /activity flips the agent runtime status to running and emits agent.state_changed", async () => {
+  const roster: readonly AgentConfig[] = [{ id: "alice", role: "engineer" }];
+  const deps = makeDeps(roster);
+  const app = createServer(deps, { projectId: PROJECT_ID });
+
+  const res = await app.fetch(
+    new Request("http://x/activity", {
+      method: "POST",
+      headers: {
+        "X-Keni-Role": "engineer",
+        "X-Keni-Agent": "alice",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session_id: "s1",
+        agent: "alice",
+        role: "engineer",
+        event: "session_start",
+        summary: "begin",
+      }),
+    }),
+  );
+  assertEquals(res.status, 201);
+
+  const snapshot = deps.agentRuntimeStateStore.read("alice");
+  assertEquals(snapshot.status, "running");
+  assertEquals(snapshot.last_activity, "session_start");
+  assert(snapshot.last_active_at !== null);
+
+  const stateChanged = deps.busBuffer.filter((f) => f.event === "agent.state_changed");
+  assertEquals(stateChanged.length, 1);
+  if (stateChanged[0]!.event === "agent.state_changed") {
+    assertEquals(stateChanged[0]!.payload.agent_id, "alice");
+    assertEquals(stateChanged[0]!.payload.paused, false);
+    assertEquals(stateChanged[0]!.payload.status, "running");
+  }
 });

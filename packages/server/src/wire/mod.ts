@@ -25,3 +25,15 @@ export {
 export { ActivityAppendRequestSchema, parseActivityQuery } from "./activity.ts";
 
 export { ErrorResponseSchema } from "./errors.ts";
+
+export { AgentResponseSchema, AgentStatusSchema } from "./agents.ts";
+
+export {
+  ActivityAppendedPayloadSchema,
+  AgentStateChangedPayloadSchema,
+  EventEnvelopeSchema,
+  PRCreatedPayloadSchema,
+  PRUpdatedPayloadSchema,
+  TicketCreatedPayloadSchema,
+  TicketUpdatedPayloadSchema,
+} from "./events.ts";
