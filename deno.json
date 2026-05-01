@@ -7,7 +7,11 @@
     "./packages/shared"
   ],
   "imports": {
-    "@std/assert": "jsr:@std/assert@^1"
+    "@std/assert": "jsr:@std/assert@^1",
+    "@std/fs": "jsr:@std/fs@^1",
+    "@std/path": "jsr:@std/path@^1",
+    "@std/uuid": "jsr:@std/uuid@^1",
+    "@std/yaml": "jsr:@std/yaml@^1"
   },
   "compilerOptions": {
     "strict": true,

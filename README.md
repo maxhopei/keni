@@ -85,6 +85,13 @@ per-project state.
 lockfile and fails loudly if `deno.json` and `deno.lock` have drifted apart. Regenerate the lockfile
 locally by running `deno install` without `--frozen` after adding or changing an import.
 
+### Storage abstractions
+
+Every artifact (tickets, PRs, activity log, project / global config) is read and written through a
+storage interface in [`packages/shared/src/storage/`](./packages/shared/src/storage/). The
+file-backed adapters under `.keni/` are the default; in-memory test doubles ship for unit tests. See
+that folder's [`README.md`](./packages/shared/src/storage/README.md) for the contract.
+
 ### OpenSpec-driven changes
 
 Every substantive change to Keni ships through
