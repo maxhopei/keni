@@ -52,6 +52,11 @@ export class InMemoryConfigStore implements ConfigStore {
     this.#project = deepClone(config);
     return Promise.resolve();
   }
+
+  writeGlobalConfig(config: GlobalConfig): Promise<void> {
+    this.#globalConfig = deepClone(config);
+    return Promise.resolve();
+  }
 }
 
 function deepClone<T>(value: T): T {

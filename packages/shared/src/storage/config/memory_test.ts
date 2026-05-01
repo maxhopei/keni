@@ -39,3 +39,20 @@ Deno.test("InMemoryConfigStore — writeProjectConfig stores a deep copy (mutati
   assertEquals(reread.name, "n");
   assertEquals(reread.agents?.[0]?.role, "engineer");
 });
+
+Deno.test("InMemoryConfigStore — writeGlobalConfig before any read does not throw and persists", async () => {
+  const store = new InMemoryConfigStore();
+  await store.writeGlobalConfig({ log_level: "warn" });
+  assertEquals(await store.readGlobalConfig(), { log_level: "warn" });
+});
+
+Deno.test("InMemoryConfigStore — writeGlobalConfig stores a deep copy (mutating input does not affect the store)", async () => {
+  const store = new InMemoryConfigStore();
+  const input: { log_level?: "debug" | "info" | "warn" | "error" } = {
+    log_level: "info",
+  };
+  await store.writeGlobalConfig(input);
+  input.log_level = "debug";
+  const reread = await store.readGlobalConfig();
+  assertEquals(reread.log_level, "info");
+});

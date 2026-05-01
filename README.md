@@ -35,6 +35,42 @@ need to `cd` into an individual package to lint, type-check, or run tests for th
 | `deno task test`      | Run `deno test -A` across every workspace member  |
 | `deno task build`     | Fan out the `build` task to each `@keni/*` member |
 
+### Initialise a Keni project (`keni init`)
+
+Once the workspace is installed, run `keni init` in any folder (empty or with existing code) to
+bootstrap a Keni project. During the prototype, the `keni` binary is not yet packaged, so invoke the
+CLI directly through Deno:
+
+```bash
+deno run -A packages/cli/src/main.ts init [path]
+```
+
+`path` defaults to the current working directory. The first run produces:
+
+```
+<path>/
+├── .gitignore                         (created or merged additively)
+└── .keni/
+    ├── project.yaml                   (UUIDv4 project_id, default agent `alice`)
+    ├── state.json                     (gitignored placeholder skeleton)
+    ├── tickets/.gitkeep
+    ├── prs/.gitkeep
+    └── activity/.gitkeep
+~/.keni/                               (created on first ever run)
+├── config.yaml                        (empty stub)
+└── logs/
+```
+
+The first run also calls `git init` if needed and stages a single initial commit covering the new
+`.keni/` tree and the merged `.gitignore`. Subsequent runs are idempotent: a fully-initialised
+project re-runs as a no-op (`already initialised`); a partial state (e.g., `.keni/tickets/` deleted)
+is repaired in place. The `project_id` is stable across re-runs and across project-folder renames.
+
+The on-disk contract is formalised in the
+[`project-layout` capability spec](./openspec/changes/project-and-global-layout-with-init/specs/project-layout/spec.md)
+(active until archived). Once archived, the canonical reference moves to
+[`openspec/specs/project-layout/spec.md`](./openspec/specs/).
+
 ## Repository layout
 
 ```

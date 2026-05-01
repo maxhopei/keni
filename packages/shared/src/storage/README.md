@@ -21,6 +21,13 @@ Four interfaces, one per artifact type:
 | `ActivityLogStore` | Append-only activity log | `<root>/.keni/activity/YYYY-MM-DD.jsonl`            |
 | `ConfigStore`      | Project / global config  | `<root>/.keni/project.yaml` + `~/.keni/config.yaml` |
 
+The `.keni/` tree itself (the empty `tickets/`, `prs/`, `activity/` directories with their
+`.gitkeep` placeholders, plus `project.yaml`, `state.json`, and the merged `.gitignore`) is what
+`keni init` produces — see the [`project-layout` capability spec](../../../../openspec/) (in
+`openspec/changes/project-and-global-layout-with-init/specs/project-layout/spec.md` until archived,
+then under `openspec/specs/project-layout/`). This module is the storage contract those directories
+satisfy.
+
 Each interface has two implementations:
 
 - **`FileXStore`** — production default. Reads / writes the on-disk layout documented above.
@@ -60,10 +67,12 @@ touched.
 
 ## Atomicity guarantee
 
-- **Tickets, PRs, project config** — atomic via `writeFileAtomic` (`atomic.ts`): write to a
-  same-directory `.keni-tmp-*` file, then `rename()` onto the target. POSIX `rename()` is atomic
-  when source and destination are on the same filesystem; readers always observe either the
-  pre-write or the post-write state, never a partial write.
+- **Tickets, PRs, project config, global config** — atomic via `writeFileAtomic` (`atomic.ts`):
+  write to a same-directory `.keni-tmp-*` file, then `rename()` onto the target. POSIX `rename()` is
+  atomic when source and destination are on the same filesystem; readers always observe either the
+  pre-write or the post-write state, never a partial write. `writeGlobalConfig` (used by `keni init`
+  to bootstrap `~/.keni/config.yaml` per `spec.md` §7.1) lazy-creates the parent `~/.keni/`
+  directory before the rename so the temp file always lands on the same filesystem as its target.
 - **Activity log entries** — atomic via a single `O_APPEND` `write()`. POSIX guarantees an
   `O_APPEND` write of less than `PIPE_BUF` (4096 bytes) is atomic with respect to other appenders.
   Entries whose serialised JSON exceeds 4096 bytes are rejected with `InvalidArtifactError`
@@ -75,10 +84,16 @@ mid-write and verify the previous file version is preserved.
 ## Single-writer-per-artifact
 
 The file-backed adapters are documented as **single-writer-per-artifact**. Concurrent writers to the
-same ticket / PR / config file from different processes are undefined behaviour beyond what
-`rename()` guarantees; `O_APPEND` writes to the activity log are safe for concurrent appenders
-(within the 4 KB bound) but cross-process activity readers may see entries out of insertion order if
-the underlying file system reorders writes across writers.
+same ticket / PR / project-config / global-config file from different processes are undefined
+behaviour beyond what `rename()` guarantees; `O_APPEND` writes to the activity log are safe for
+concurrent appenders (within the 4 KB bound) but cross-process activity readers may see entries out
+of insertion order if the underlying file system reorders writes across writers.
+
+The same constraint applies to the **global config** at `~/.keni/config.yaml`. The user typically
+never has two Keni processes writing the global file simultaneously, but `writeGlobalConfig` makes
+no attempt at cross-process locking; the file-backed adapter's atomicity guarantee (write-and-rename
+with a same-directory temp file) is the only protection. `keni init` is structurally a single
+writer; future config-edit flows are expected to serialise.
 
 Higher layers (REST, MCP) serialise concurrent mutations on the same artifact id when needed — that
 responsibility is **not** the storage adapter's. The `transitionStatus` (tickets) and `updateStatus`

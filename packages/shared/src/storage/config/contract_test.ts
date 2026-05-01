@@ -174,4 +174,47 @@ export function runConfigStoreContract(
       "hello",
     );
   });
+
+  test("writeGlobalConfig + readGlobalConfig round-trips equal-but-not-same-reference", async () => {
+    const { store } = await factory();
+    const input = { log_level: "debug", coding_agent_cli: "claude" } as const;
+    await store.writeGlobalConfig({ ...input });
+    const read = await store.readGlobalConfig();
+    assertEquals(read, input);
+  });
+
+  test("writeGlobalConfig({}) produces a readable empty config", async () => {
+    const { store } = await factory();
+    await store.writeGlobalConfig({});
+    const read = await store.readGlobalConfig();
+    assertEquals(read, {});
+  });
+
+  test("writeGlobalConfig deep-copies on write (caller mutation does not leak)", async () => {
+    const { store } = await factory();
+    const input: { log_level?: "debug" | "info" | "warn" | "error" } = {
+      log_level: "info",
+    };
+    await store.writeGlobalConfig(input);
+    input.log_level = "warn";
+    const read = await store.readGlobalConfig();
+    assertEquals(read.log_level, "info");
+  });
+
+  test("writeGlobalConfig replaces the previous value (last write wins)", async () => {
+    const { store } = await factory();
+    await store.writeGlobalConfig({ log_level: "info" });
+    await store.writeGlobalConfig({ log_level: "debug" });
+    const read = await store.readGlobalConfig();
+    assertEquals(read, { log_level: "debug" });
+  });
+
+  test("resolve sees the global values written via writeGlobalConfig", async () => {
+    const { store } = await factory();
+    await store.writeProjectConfig(SAMPLE_PROJECT);
+    await store.writeGlobalConfig({ coding_agent_cli: "cursor-agent" });
+    const resolved = await store.resolve();
+    assertEquals(resolved.coding_agent_cli, "cursor-agent");
+    assertEquals(resolved.project_id, "p-001");
+  });
 }

@@ -65,6 +65,11 @@ export class FileConfigStore implements ConfigStore {
     const yaml = stringifyYaml(config as unknown as Record<string, unknown>);
     await writeFileAtomic(this.#projectPath, yaml);
   }
+
+  async writeGlobalConfig(config: GlobalConfig): Promise<void> {
+    const yaml = stringifyYaml(config as unknown as Record<string, unknown>);
+    await writeFileAtomic(this.#globalPath, yaml);
+  }
 }
 
 function parseConfig<T>(raw: string, path: string): T {

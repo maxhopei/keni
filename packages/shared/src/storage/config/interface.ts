@@ -66,9 +66,16 @@ export interface ResolvedConfig extends Partial<GlobalConfig>, Partial<ProjectCo
 /**
  * Storage interface for configuration.
  *
- * **Atomicity:** `writeProjectConfig` is atomic via `writeFileAtomic`. The
- * global config is read-only through this interface (writes belong to a
- * dedicated `keni config` CLI in a later step).
+ * **Atomicity:** both `writeProjectConfig` and `writeGlobalConfig` are atomic
+ * via `writeFileAtomic` (write-to-sibling-tempfile then `rename()`). A
+ * concurrent reader observes either the pre-write or the post-write state,
+ * never a partial write.
+ *
+ * **Single-writer-per-artifact:** the file-backed adapter does not lock
+ * concurrent writers to the same config file from different processes;
+ * higher layers (the `keni init` CLI is structurally a single writer; future
+ * config-edit flows are expected to serialise) own that responsibility. See
+ * `packages/shared/src/storage/README.md`.
  *
  * **Defaults:** `readGlobalConfig` returns `{}` when the file does not
  * exist; the schema is fully optional, so `{}` is a valid `GlobalConfig`.
@@ -104,7 +111,22 @@ export interface ConfigStore {
   resolve(): Promise<ResolvedConfig>;
 
   /**
-   * Atomically write the project config. Replaces the on-disk file.
+   * Atomically write the project config. Replaces the on-disk file. The
+   * file-backed adapter writes via `writeFileAtomic` (rename-based);
+   * partial-write states are not observable.
    */
   writeProjectConfig(config: ProjectConfig): Promise<void>;
+
+  /**
+   * Atomically write the global config to `~/.keni/config.yaml`. Replaces
+   * the on-disk file. The file-backed adapter lazy-creates the parent
+   * `~/.keni/` directory on first write, then performs a `writeFileAtomic`
+   * with a same-directory temp file so the rename is same-filesystem.
+   *
+   * Used by `keni init` to bootstrap the global directory on first use
+   * (`spec.md` §7.1) and by future user-level config-edit flows.
+   *
+   * Subject to the single-writer-per-artifact contract documented above.
+   */
+  writeGlobalConfig(config: GlobalConfig): Promise<void>;
 }
