@@ -71,6 +71,36 @@ The on-disk contract is formalised in the
 (active until archived). Once archived, the canonical reference moves to
 [`openspec/specs/project-layout/spec.md`](./openspec/specs/).
 
+### Run the orchestration server
+
+`@keni/server` is the local HTTP service the SPA, role runtimes, and (later) the MCP layer talk to.
+During the prototype it has no `keni start` wrapper yet — invoke it directly with `deno run`:
+
+```bash
+deno run -A packages/server/src/main.ts --project /absolute/path/to/keni-project --port 0
+```
+
+`--project` points at a `keni init`-produced directory (the one containing `.keni/project.yaml`).
+`--port 0` lets the OS assign a free port (the bound URL is printed to stdout); pass `--port 8080`
+to pin one. The server binds to `127.0.0.1` by default; override with `--host` if you really need
+to. **Trust model:** the server is local-only with no auth, no TLS, no CORS — every request is
+identified by an `X-Keni-Role: <user|engineer|qa|po|writer>` header that the server takes at face
+value. Do not expose this port off the loopback.
+
+A one-line smoke test against the running server:
+
+```bash
+curl -H "X-Keni-Role: user" http://127.0.0.1:<port>/tickets
+# => { "data": [], "project_id": "<uuid>" }
+```
+
+Step 13 (`cli-start-and-end-to-end-wiring`) folds this invocation into a `keni start` subcommand
+that handles signal management, `~/.keni/logs/server-YYYY-MM-DD.jsonl` log routing, and (later)
+process supervision; `runServer` is already the dispatch target so that change is one line.
+
+The full HTTP contract — endpoints, wire shapes, error envelope, role rules — lives in the
+[`orchestration-server` capability spec](./openspec/changes/orchestration-server-and-rest-apis/specs/orchestration-server/spec.md).
+
 ## Repository layout
 
 ```

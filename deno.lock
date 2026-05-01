@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@hono/hono@4": "4.12.16",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/bytes@^1.0.6": "1.0.6",
     "jsr:@std/crypto@^1.0.5": "1.0.5",
@@ -9,9 +10,13 @@
     "jsr:@std/path@1": "1.1.4",
     "jsr:@std/path@^1.1.4": "1.1.4",
     "jsr:@std/uuid@1": "1.1.0",
-    "jsr:@std/yaml@1": "1.0.10"
+    "jsr:@std/yaml@1": "1.0.10",
+    "npm:zod@4": "4.3.6"
   },
   "jsr": {
+    "@hono/hono@4.12.16": {
+      "integrity": "d3a3ca0d713852c91881541e74d5ffac0b4af38b8c1285e8ed5ee47b68c58f94"
+    },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
       "dependencies": [
@@ -51,13 +56,20 @@
       "integrity": "245706ea3511cc50c8c6d00339c23ea2ffa27bd2c7ea5445338f8feff31fa58e"
     }
   },
+  "npm": {
+    "zod@4.3.6": {
+      "integrity": "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="
+    }
+  },
   "workspace": {
     "dependencies": [
+      "jsr:@hono/hono@4",
       "jsr:@std/assert@1",
       "jsr:@std/fs@1",
       "jsr:@std/path@1",
       "jsr:@std/uuid@1",
-      "jsr:@std/yaml@1"
+      "jsr:@std/yaml@1",
+      "npm:zod@4"
     ]
   }
 }

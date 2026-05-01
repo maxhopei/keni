@@ -28,6 +28,21 @@ The `.keni/` tree itself (the empty `tickets/`, `prs/`, `activity/` directories 
 then under `openspec/specs/project-layout/`). This module is the storage contract those directories
 satisfy.
 
+## Wire shapes vs. storage records (HTTP boundary)
+
+Storage records (`Ticket`, `PR`, `ActivityEntry`) carry on-disk concerns: file-implied id, YAML
+front-matter shape, the `{ header, body }` split. **Wire shapes**, which live next door under
+[`@keni/shared/wire/`](../wire/mod.ts), carry HTTP concerns: a flat JSON object the SPA can render
+directly, the standard envelope `{ data, project_id }`, and the documented error envelope
+`{ error: { code, message, details? } }`. The orchestration server
+([`orchestration-server` capability spec](../../../../openspec/changes/orchestration-server-and-rest-apis/specs/orchestration-server/spec.md),
+moving to `openspec/specs/orchestration-server/spec.md` after archive) maps storage records to wire
+shapes inside `packages/server/src/routes/*.ts`. The mapping is trivial today (the shapes are nearly
+identical), but the seam exists so a future on-disk schema change does not force every API response
+to change too. zod schemas for the request shapes live server-side in `packages/server/src/wire/`;
+consumers that only need the types (e.g., the SPA) import from `@keni/shared` and tree-shake zod out
+of their bundle.
+
 Each interface has two implementations:
 
 - **`FileXStore`** — production default. Reads / writes the on-disk layout documented above.
