@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the contract for the engineer-facing MCP tool surface that `@keni/server` ships under `packages/server/src/mcp/` — the only legitimate API a coding-agent subprocess (Claude Code, Cursor agent, OpenCode, etc.) is allowed to use against a Keni project, per `spec.md` §5.3 (`.keni/` write boundary), §5.4 ("All other reads and writes happen through MCP tools exposed by Keni"), and §6.4 (subprocess agnosticism). The capability requires a runnable stdio MCP server composed of three layered functions (`createMcpServer` pure factory, `runMcpServer` CLI entry, and a `main.ts` barrel that re-exports both plus `McpServerDeps` and `McpHttpClient`), built on `npm:@modelcontextprotocol/sdk@^1`, registering exactly seven tools (`list_tickets`, `read_ticket`, `update_ticket_body`, `transition_ticket_status`, `append_activity_entry`, `query_activity`, `get_workspace_path`) with stable verbatim descriptions, strict zod v4 input schemas (no `agent`/`role`/`workspace` fields exposed to the LLM, extra keys rejected), and handlers that are thin transport adapters to existing orchestration-server REST endpoints (no `.keni/` direct reads, no duplication of the §4.1 status graph or §4.2 owning-role rule). Identity is captured once at boot from three required CLI flags (`--agent`, `--server-url`, `--workspace`), validated before any I/O, stamped on every outbound request as `X-Keni-Role: engineer` and `X-Keni-Agent: <agentId>`, and never overridable through tool input — the role is hard-coded at the factory boundary so a future PO MCP server (step 16) lands as a sibling factory rather than as a runtime parameter. Errors flow through a single central `mapHttpErrorToToolResult` that maps `McpHttpError` (and any other thrown value) into the MCP `isError: true` envelope using the closed `ErrorCode` enum from step 04 verbatim — no new codes are introduced. The capability inherits the orchestration server's local-only / no-auth / role-headers-trusted trust model with the additional caveat that the role runtime (step 07) is the only legitimate spawner of the MCP-server binary; the MCP-server process holds no state across invocations beyond its three boot-time arguments and the §6 fresh-session rule is preserved by spawning a new process per cycle. Explicitly out of scope: PO-only tools (chat / ticket-create-from-CR / PR-read — step 16), tools that touch `.keni/de-facto-spec/` or `.keni/changes/` (PO-direct per §5.3), PR-record write tools (engineers create PRs through the role runtime's git/PR handling in step 09), and WebSocket-style streaming tools (MCP is request/response — live updates flow over the orchestration server's `/events` socket to the SPA, not to the engineer subprocess). Any change that adds a tool, alters an input schema, exposes identity through tool input, introduces a new error code, switches the transport, or relaxes the spawn-trust caveat lands as a delta spec against this capability.
-
 ## Requirements
-
 ### Requirement: `@keni/server` exposes a runnable stdio MCP server for engineer subprocesses
 
 The `@keni/server` package SHALL expose, from `packages/server/src/mcp/`, a runnable stdio MCP server whose entry-point is composed of three layered functions: `createMcpServer(deps: McpServerDeps): McpServer` (pure factory, returns a fully-configured `McpServer` instance from `@modelcontextprotocol/sdk` with all engineer tools registered, performs no I/O), `runMcpServer(args: string[]): Promise<number>` (CLI-style entry that parses argv, validates, instantiates the typed HTTP client, calls `createMcpServer`, attaches a `StdioServerTransport`, awaits shutdown, and returns an exit code: 0 on clean shutdown, 1 on runtime failure, 2 on usage error), and `packages/server/src/mcp/main.ts` (re-exports the two functions plus the `McpServerDeps` and `McpHttpClient` types, and invokes `Deno.exit(await runMcpServer(Deno.args))` only when run as a script via `import.meta.main`). The `@keni/server` package's main barrel (`packages/server/src/main.ts`) SHALL re-export `runMcpServer`, `createMcpServer`, `McpServerDeps`, and `McpHttpClient` so the role runtime in step 07 can `import { … } from "@keni/server"` without reaching into the `mcp/` subdirectory.
@@ -73,7 +71,7 @@ The `createMcpServer` factory SHALL hard-code the role identity to `engineer`. T
 
 ### Requirement: The seven engineer tools are registered with the documented names, descriptions, and zod input schemas
 
-`createMcpServer` SHALL register exactly these tools, each with a non-empty `description`, a zod v4 `inputSchema`, and a handler that delegates to the typed HTTP client (or, for `get_workspace_path`, returns the boot-time `workspacePath`):
+`createMcpServer` SHALL register exactly **eight** tools, each with a non-empty `description`, a zod v4 `inputSchema`, and a handler that delegates to the typed HTTP client (or, for `get_workspace_path`, returns the boot-time `workspacePath`):
 
 | Tool name | Description (≤2 sentences) | Input schema (zod v4) | HTTP delegate |
 | --- | --- | --- | --- |
@@ -84,14 +82,15 @@ The `createMcpServer` factory SHALL hard-code the role identity to `engineer`. T
 | `append_activity_entry` | Appends one entry to the project's activity log under the calling agent's identity. The `agent` and `role` fields are stamped server-side and cannot be overridden. | `{ session_id: string, event: ActivityEventName, summary?: string, refs?: Record<string, string> }` | `POST /activity` |
 | `query_activity` | Queries the activity log with optional filters and a per-call limit (default 200, hard ceiling 1000). Use a narrow `from`/`to` window to keep results focused. | `{ agent?: string, role?: string, from?: string, to?: string, limit?: number }` | `GET /activity?<filters>` |
 | `get_workspace_path` | Returns the absolute filesystem path of this engineer's workspace clone. The path is read once at startup and is constant for the life of this MCP-server process. | `{}` (no input) | (none — reads boot-time CLI arg) |
+| `merge_pr` | Fast-forward merges the PR's source branch onto `main` via the orchestration server. Returns the merge commit SHA on success; surfaces `merge_conflict` as an MCP error when the branch is not a fast-forward. | `{ pr_id: string }` (matches `/^pr-\d{4,}$/`) | `POST /prs/:id/merge` |
 
 Each tool's `description` SHALL be a single literal string in the source code (no template interpolation). The descriptions SHALL be matched verbatim by a string-stability test in `createMcpServer_test.ts` so a silent edit fails CI.
 
-#### Scenario: All seven tools are registered with the documented names
+#### Scenario: All eight tools are registered with the documented names
 
 - **WHEN** `createMcpServer` is constructed with a fake HTTP client
 - **AND** the resulting server's tool list is queried
-- **THEN** the names exactly equal `["list_tickets", "read_ticket", "update_ticket_body", "transition_ticket_status", "append_activity_entry", "query_activity", "get_workspace_path"]` (order is implementation-defined)
+- **THEN** the names exactly equal `["list_tickets", "read_ticket", "update_ticket_body", "transition_ticket_status", "append_activity_entry", "query_activity", "get_workspace_path", "merge_pr"]` (order is implementation-defined)
 
 #### Scenario: Each tool registers with a non-empty description
 
@@ -111,6 +110,12 @@ Each tool's `description` SHALL be a single literal string in the source code (n
 - **WHEN** `append_activity_entry` is invoked with input `{ session_id: "s1", event: "summary", agent: "bob" }`
 - **THEN** the input schema rejects the call before any HTTP request is made
 - **AND** no entry is appended to the activity log
+
+#### Scenario: `merge_pr`'s schema rejects non-PR ids
+
+- **WHEN** `merge_pr` is invoked with input `{ pr_id: "ticket-0001" }`
+- **THEN** the input schema rejects the call before any HTTP request is made
+- **AND** the tool result has `isError: true`
 
 ### Requirement: Identity propagation — three CLI flags validated at startup, stamped on every outbound request, never overridable via tool input
 
@@ -138,7 +143,7 @@ Each tool's `description` SHALL be a single literal string in the source code (n
 
 ### Requirement: Every tool delegates to an existing orchestration-server REST endpoint via a typed HTTP client; no tool reads or writes `.keni/` directly
 
-`packages/server/src/mcp/httpClient.ts` SHALL export `createMcpHttpClient(opts: { serverUrl: string; agentId: string }): McpHttpClient` returning an object with one method per delegated endpoint: `listTickets(filter)`, `readTicket(id)`, `updateTicketBody(id, body)`, `transitionTicket(id, from, to)`, `appendActivity(input)`, `queryActivity(filter, limit)`. Each method SHALL: (1) compose the URL using `URLSearchParams` for query strings; (2) set `Content-Type: application/json` for write methods; (3) set `X-Keni-Role: engineer` and `X-Keni-Agent: <agentId>`; (4) issue `await fetch(...)`; (5) on a 2xx response, parse the `{ data, project_id }` envelope and return `data`; (6) on a non-2xx response, parse the `{ error: { code, message, details? } }` envelope and throw `new McpHttpError(code, message, details, status)`; (7) on a network-level rejection (`fetch` rejects, e.g. ECONNREFUSED), throw `new McpHttpError("internal_error", `Network error talking to ${url}: ${cause.message}`, ..., 0)`. No method SHALL read or write any path under `.keni/` directly; every state-changing operation flows through the orchestration-server REST endpoint that owns it.
+`packages/server/src/mcp/httpClient.ts` SHALL export `createMcpHttpClient(opts: { serverUrl: string; agentId: string }): McpHttpClient` returning an object with one method per delegated endpoint: `listTickets(filter)`, `readTicket(id)`, `updateTicketBody(id, body)`, `transitionTicket(id, from, to)`, `appendActivity(input)`, `queryActivity(filter, limit)`, **and `mergePr(prId): Promise<{ merge_commit_sha: string }>`**. Each method SHALL: (1) compose the URL using `URLSearchParams` for query strings; (2) set `Content-Type: application/json` for write methods (the `mergePr` method's request body is empty so `Content-Type` MAY be omitted); (3) set `X-Keni-Role: engineer` and `X-Keni-Agent: <agentId>`; (4) issue `await fetch(...)`; (5) on a 2xx response, parse the `{ data, project_id }` envelope and return `data`; (6) on a non-2xx response, parse the `{ error: { code, message, details? } }` envelope and throw `new McpHttpError(code, message, details, status)`; (7) on a network-level rejection (`fetch` rejects, e.g. ECONNREFUSED), throw `new McpHttpError("internal_error", `Network error talking to ${url}: ${cause.message}`, ..., 0)`. No method SHALL read or write any path under `.keni/` directly; every state-changing operation flows through the orchestration-server REST endpoint that owns it.
 
 #### Scenario: A successful response is unwrapped from the envelope
 
@@ -162,58 +167,25 @@ Each tool's `description` SHALL be a single literal string in the source code (n
 - **AND** the error's `code` is `"internal_error"`
 - **AND** the error's `message` names the URL that was being targeted
 
+#### Scenario: `mergePr` issues an empty-bodied POST and unwraps `merge_commit_sha`
+
+- **WHEN** `httpClient.mergePr("pr-0001")` is called
+- **AND** the orchestration server responds 200 with `{ data: { merge_commit_sha: "abc1234..." }, project_id: "<uuid>" }`
+- **THEN** the method's return value is `{ merge_commit_sha: "abc1234..." }`
+- **AND** the captured request body is the empty string
+
+#### Scenario: `mergePr` surfaces `merge_conflict` as a typed `McpHttpError`
+
+- **WHEN** `httpClient.mergePr("pr-0001")` is called
+- **AND** the orchestration server responds 409 with `{ error: { code: "merge_conflict", message: "...", details: { branch, base } }, project_id }`
+- **THEN** the method rejects with an `McpHttpError`
+- **AND** the error's `code` is `"merge_conflict"`
+- **AND** the error's `details` carries `branch` and `base` fields
+
 #### Scenario: No tool reads `.keni/` directly
 
 - **WHEN** the source code under `packages/server/src/mcp/` is grepped for `Deno.readTextFile`, `Deno.writeTextFile`, `Deno.readFile`, `Deno.writeFile`, or any path beginning with `.keni/`
 - **THEN** no occurrence is found in any tool handler or HTTP-client method (test files MAY use `Deno.stat` against the workspace path passed via `--workspace`, which is itself outside `.keni/`)
-
-### Requirement: Errors map to the MCP `isError: true` shape via a single central function; the orchestration server's `ErrorCode` enum is reused verbatim with no new codes
-
-`packages/server/src/mcp/errors.ts` SHALL export `class McpHttpError extends Error` with public readonly fields `code: string`, `details: Record<string, unknown> | undefined`, and `httpStatus: number`. It SHALL also export `mapHttpErrorToToolResult(err: unknown): { content: [{ type: "text"; text: string }]; isError: true }` whose behaviour is: (a) when `err instanceof McpHttpError`, return content with text `[<code>] <message> (HTTP <status>)` plus an indented `Details:` block when `details` is defined; (b) when `err` is any other thrown value, return content with text `[internal_error] Unexpected error in MCP tool handler: <message>`; in all cases `isError` is `true`. Every tool handler SHALL wrap its HTTP-client call in `try`/`catch` and pass any thrown value through `mapHttpErrorToToolResult`. Successful tool results SHALL be wrapped as `{ content: [{ type: "text", text: JSON.stringify(record, null, 2) }] }` with no `isError` key. The codes a tool may surface SHALL be drawn from the closed `ErrorCode` enum defined in `@keni/shared/wire/errors.ts` (`store_not_found`, `stale_state`, `duplicate_id`, `invalid_artifact`, `status_in_patch`, `status_graph_violation`, `role_not_owner`, `missing_role`, `validation_failed`, `internal_error`); no new code SHALL be added to the enum by this change.
-
-#### Scenario: A `store_not_found` HTTP error becomes an MCP `isError: true` result
-
-- **WHEN** `read_ticket` is invoked with id `ticket-9999` against an empty project
-- **AND** the orchestration server responds with 404 `store_not_found`
-- **THEN** the tool result has `isError: true`
-- **AND** the `content[0].text` starts with `[store_not_found]`
-- **AND** the result is **not** thrown — it is returned per the MCP SDK's tool-handler contract
-
-#### Scenario: A `role_not_owner` HTTP error becomes an MCP `isError: true` result
-
-- **WHEN** `transition_ticket_status` is invoked with `{ id: "ticket-0001", from: "tested", to: "done" }` (PO-owned target)
-- **AND** the on-disk status is `tested`
-- **THEN** the tool result has `isError: true`
-- **AND** the `content[0].text` starts with `[role_not_owner]`
-- **AND** the on-disk ticket status is unchanged
-
-#### Scenario: A `status_graph_violation` HTTP error becomes an MCP `isError: true` result
-
-- **WHEN** `transition_ticket_status` is invoked with `{ id: "ticket-0001", from: "open", to: "merged" }` (graph violation)
-- **AND** the on-disk status is `open`
-- **THEN** the tool result has `isError: true`
-- **AND** the `content[0].text` starts with `[status_graph_violation]`
-
-#### Scenario: A network-level failure becomes an `[internal_error]` MCP result naming the URL
-
-- **WHEN** any tool is invoked
-- **AND** the orchestration server is unreachable
-- **THEN** the tool result has `isError: true`
-- **AND** the `content[0].text` starts with `[internal_error]`
-- **AND** the `content[0].text` names the URL that was being targeted
-
-#### Scenario: An unknown thrown value becomes an `[internal_error]` MCP result
-
-- **WHEN** a tool handler internal helper throws a non-`McpHttpError` value (e.g. a `TypeError` from a JSON parse failure)
-- **THEN** the tool result has `isError: true`
-- **AND** the `content[0].text` starts with `[internal_error]`
-- **AND** the original message is preserved
-
-#### Scenario: The `ErrorCode` enum is unchanged from step 04
-
-- **WHEN** the value of `ERROR_CODES` in `@keni/shared/wire/errors.ts` is read after this change lands
-- **THEN** the array equals the closed list from step 04 (`store_not_found`, `stale_state`, `duplicate_id`, `invalid_artifact`, `status_in_patch`, `status_graph_violation`, `role_not_owner`, `missing_role`, `validation_failed`, `internal_error`)
-- **AND** no new code has been added by this change
 
 ### Requirement: `list_tickets`, `read_ticket`, `update_ticket_body`, `transition_ticket_status` cover the engineer's ticket surface end-to-end
 
@@ -465,4 +437,81 @@ The test SHALL clean up the spawned MCP-server subprocess (closing stdin, awaiti
 - **THEN** the spawned MCP-server subprocess has its stdin closed and is awaited within the test's teardown
 - **AND** the orchestration server's `abort()` is called within the test's teardown
 - **AND** no orphan process or open port persists after the test run completes
+
+### Requirement: Errors map to the MCP `isError: true` shape via a single central function; the orchestration server's `ErrorCode` enum is reused verbatim
+
+`packages/server/src/mcp/errors.ts` SHALL export `class McpHttpError extends Error` with public readonly fields `code: string`, `details: Record<string, unknown> | undefined`, and `httpStatus: number`. It SHALL also export `mapHttpErrorToToolResult(err: unknown): { content: [{ type: "text"; text: string }]; isError: true }` whose behaviour is: (a) when `err instanceof McpHttpError`, return content with text `[<code>] <message> (HTTP <status>)` plus an indented `Details:` block when `details` is defined; (b) when `err` is any other thrown value, return content with text `[internal_error] Unexpected error in MCP tool handler: <message>`; in all cases `isError` is `true`. Every tool handler SHALL wrap its HTTP-client call in `try`/`catch` and pass any thrown value through `mapHttpErrorToToolResult`. Successful tool results SHALL be wrapped as `{ content: [{ type: "text", text: JSON.stringify(record, null, 2) }] }` with no `isError` key. The codes a tool may surface SHALL be drawn from the closed `ErrorCode` enum defined in `@keni/shared/wire/errors.ts` (`store_not_found`, `stale_state`, `duplicate_id`, `invalid_artifact`, `status_in_patch`, `status_graph_violation`, `role_not_owner`, `missing_role`, `validation_failed`, `internal_error`, **`merge_conflict`**); the `merge_conflict` code is added by the engineer-runtime-and-workspace change's orchestration-server delta and SHALL be the only addition this change makes to the enum.
+
+#### Scenario: A `store_not_found` HTTP error becomes an MCP `isError: true` result
+
+- **WHEN** `read_ticket` is invoked with id `ticket-9999` against an empty project
+- **AND** the orchestration server responds with 404 `store_not_found`
+- **THEN** the tool result has `isError: true`
+- **AND** the `content[0].text` starts with `[store_not_found]`
+- **AND** the result is **not** thrown — it is returned per the MCP SDK's tool-handler contract
+
+#### Scenario: A `role_not_owner` HTTP error becomes an MCP `isError: true` result
+
+- **WHEN** `transition_ticket_status` is invoked with `{ id: "ticket-0001", from: "tested", to: "done" }` (PO-owned target)
+- **AND** the on-disk status is `tested`
+- **THEN** the tool result has `isError: true`
+- **AND** the `content[0].text` starts with `[role_not_owner]`
+- **AND** the on-disk ticket status is unchanged
+
+#### Scenario: A `merge_conflict` HTTP error becomes an MCP `isError: true` result
+
+- **WHEN** `merge_pr` is invoked with `{ pr_id: "pr-0001" }` against a PR whose branch is not a fast-forward of `main`
+- **AND** the orchestration server responds with 409 `merge_conflict`
+- **THEN** the tool result has `isError: true`
+- **AND** the `content[0].text` starts with `[merge_conflict]`
+- **AND** the rendered text includes the `details` block naming `branch` and `base`
+
+### Requirement: An eighth engineer MCP tool `merge_pr` is registered and delegates to `POST /prs/:id/merge`
+
+`createMcpServer` SHALL register an eighth engineer-facing tool `merge_pr` in addition to the seven previously-documented tools. The tool's `description` SHALL be a single literal string of at most two sentences that names the PR-id input, the fast-forward semantics, the engineer-only authorisation, and the returned merge commit SHA. The tool's zod v4 `inputSchema` SHALL be exactly `{ pr_id: string }`, with `pr_id` constrained to match the documented PR id pattern (`/^pr-\d{4,}$/`). The handler SHALL delegate to a new `httpClient.mergePr(prId): Promise<{ merge_commit_sha: string }>` method on the typed HTTP client, which issues `POST /prs/:id/merge` with the standard `X-Keni-Role: engineer` and `X-Keni-Agent: <agentId>` headers and an empty request body, and returns the response envelope's `data` field. On a non-2xx response the handler SHALL surface the error through the existing central `mapHttpErrorToToolResult` so the result has `isError: true` and the `content[0].text` starts with `[<code>]` (e.g., `[merge_conflict]`, `[role_not_owner]`, `[store_not_found]`).
+
+#### Scenario: `merge_pr` is registered with the documented name and input schema
+
+- **WHEN** `createMcpServer` is constructed with a fake HTTP client
+- **AND** the resulting server's tool list is queried
+- **THEN** the names contain `"merge_pr"` (in addition to the seven previously-documented names)
+- **AND** the `merge_pr` tool's `inputSchema` declares exactly the field `pr_id` (typed as a string matching `/^pr-\d{4,}$/`)
+- **AND** the `merge_pr` tool's `description` is a non-empty string of at most 240 characters
+
+#### Scenario: `merge_pr` delegates to `POST /prs/:id/merge` with the engineer headers
+
+- **WHEN** the tool is invoked with `{ pr_id: "pr-0001" }`
+- **AND** the orchestration server captures inbound request headers
+- **THEN** exactly one `POST /prs/pr-0001/merge` request is issued
+- **AND** the captured request carries `X-Keni-Role: engineer` and `X-Keni-Agent: <agentId from boot config>`
+- **AND** the captured request body is the empty string (no body)
+
+#### Scenario: A successful merge returns the SHA wrapped in the standard MCP success envelope
+
+- **WHEN** the tool is invoked with `{ pr_id: "pr-0001" }`
+- **AND** the orchestration server responds 200 with `{ data: { merge_commit_sha: "abc1234..." }, project_id: "<uuid>" }`
+- **THEN** the tool result has no `isError` key (or has `isError: false`)
+- **AND** the `content[0].text` (when parsed as JSON) equals `{ "merge_commit_sha": "abc1234..." }`
+
+#### Scenario: A `merge_conflict` HTTP error becomes an MCP `isError: true` result
+
+- **WHEN** the tool is invoked with `{ pr_id: "pr-0001" }`
+- **AND** the orchestration server responds 409 with `{ error: { code: "merge_conflict", message: "Branch is not a fast-forward of main", details: { branch: "ticket-0001", base: "main" } }, project_id: "<uuid>" }`
+- **THEN** the tool result has `isError: true`
+- **AND** the `content[0].text` starts with `[merge_conflict]`
+- **AND** the rendered text includes the substring `"branch"` and `"main"` (from the details block)
+
+#### Scenario: A `role_not_owner` HTTP error becomes an MCP `isError: true` result
+
+- **WHEN** the tool is invoked from a non-engineer subprocess (a contrived test where the HTTP client's `X-Keni-Role` header is forged to `"qa"`)
+- **AND** the orchestration server responds 403 with `{ error: { code: "role_not_owner", … } }`
+- **THEN** the tool result has `isError: true`
+- **AND** the `content[0].text` starts with `[role_not_owner]`
+
+#### Scenario: A malformed `pr_id` is rejected by the input schema before any HTTP request
+
+- **WHEN** the tool is invoked with `{ pr_id: "ticket-0001" }` (a ticket id, not a PR id, failing the `/^pr-\d{4,}$/` pattern)
+- **THEN** no HTTP request is issued
+- **AND** the tool result has `isError: true`
+- **AND** the `content[0].text` names `validation_failed`
 
