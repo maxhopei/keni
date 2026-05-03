@@ -30,6 +30,7 @@ import {
 } from "@keni/shared";
 import type {
   ActivityLogStore,
+  AgentConfig,
   ConfigStore,
   ProjectPaths,
   PRStore,
@@ -40,6 +41,15 @@ import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
 import { createInMemoryEventBus } from "./eventBus.ts";
 import { stdoutLogSink } from "./middleware/requestLog.ts";
 import type { LogSink } from "./middleware/types.ts";
+import { defaultClock } from "./scheduler/clock.ts";
+import { consoleSchedulerLogger, type SchedulerLogger } from "./scheduler/log.ts";
+import { type AgentRunnerRegistry, createAgentRunnerRegistry } from "./scheduler/registry.ts";
+import {
+  createScheduler,
+  type Scheduler,
+  type SchedulerDeps,
+  type SchedulerOpts,
+} from "./scheduler/scheduler.ts";
 import { startServer } from "./startServer.ts";
 
 /** Parsed CLI flags for `runServer`. */
@@ -75,6 +85,39 @@ export interface RunServerDeps {
    * default behaviour installs a SIGINT listener.
    */
   readonly shutdownSignal?: AbortSignal;
+  /**
+   * Override the scheduler logger (defaults to {@link consoleSchedulerLogger}).
+   * Tests pass a `captureSchedulerLogger(buffer)` to assert on emitted lines.
+   */
+  readonly schedulerLogger?: SchedulerLogger;
+  /**
+   * Override the scheduler factory and the registry construction. The
+   * default wires `createScheduler` against `defaultClock()` and a fresh
+   * `createAgentRunnerRegistry`. Tests inject a stub factory to assert
+   * the bootstrap call shape and lifecycle invariants per the
+   * scheduler capability spec.
+   */
+  readonly makeScheduler?: (
+    deps: SchedulerDeps,
+    opts: SchedulerOpts,
+  ) => Scheduler;
+  /**
+   * Override how the runner registry is built. Tests usually leave this
+   * default and instead `register(...)` directly against the returned
+   * registry via {@link RunServerHandle.registry} once step 12 wires
+   * the interrupt endpoint.
+   */
+  readonly makeRegistry?: (logger: SchedulerLogger) => AgentRunnerRegistry;
+  /**
+   * Test-only seam to observe the scheduler handle and the registry
+   * after bootstrap completes. The callback is invoked once after
+   * `scheduler.start()` returns; it does not gate the function's
+   * resolution.
+   */
+  readonly onSchedulerReady?: (handle: {
+    readonly scheduler: Scheduler;
+    readonly registry: AgentRunnerRegistry;
+  }) => void;
 }
 
 /**
@@ -181,11 +224,17 @@ export async function runServer(
   };
 
   let projectId: string;
-  let roster: readonly { readonly id: string; readonly role: string }[];
+  let projectName: string;
+  let roster: readonly AgentConfig[];
+  let schedules: Readonly<Record<string, string>> | undefined;
+  let timeouts: Readonly<Record<string, string | number>> | undefined;
   try {
     const config = await stores.configStore.readProjectConfig();
     projectId = config.project_id;
+    projectName = config.name;
     roster = config.agents ?? [];
+    schedules = config.schedules;
+    timeouts = config.timeouts;
   } catch (e) {
     if (e instanceof StoreNotFoundError) {
       err(
@@ -199,8 +248,10 @@ export async function runServer(
   const logSink = deps.logSink ?? stdoutLogSink();
   const eventBus = createInMemoryEventBus({ logSink });
   const agentRuntimeStateStore = createInMemoryAgentRuntimeStateStore(roster);
+  const schedulerLogger = deps.schedulerLogger ?? consoleSchedulerLogger();
+  const registry = (deps.makeRegistry ?? createAgentRunnerRegistry)(schedulerLogger);
 
-  const handle = await startServer(
+  const serverHandle = await startServer(
     {
       ticketStore: stores.ticketStore,
       prStore: stores.prStore,
@@ -213,10 +264,29 @@ export async function runServer(
     { projectId, port: parsed.port, host: parsed.host },
   );
 
-  out(`Keni server running at ${handle.url}`);
+  const scheduler = (deps.makeScheduler ?? createScheduler)(
+    {
+      runtimeStore: agentRuntimeStateStore,
+      logger: schedulerLogger,
+      registry,
+      clock: defaultClock(),
+    },
+    {
+      agents: roster,
+      ...(schedules !== undefined ? { schedules } : {}),
+      ...(timeouts !== undefined ? { timeouts } : {}),
+      serverUrl: serverHandle.url,
+      projectName,
+    },
+  );
+  scheduler.start();
+  deps.onSchedulerReady?.({ scheduler, registry });
+
+  out(`Keni server running at ${serverHandle.url}`);
 
   await waitForShutdown(deps.shutdownSignal);
-  await handle.abort();
+  await scheduler.stop();
+  await serverHandle.abort();
   return 0;
 }
 

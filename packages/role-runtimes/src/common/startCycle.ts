@@ -60,9 +60,19 @@ const DEFAULT_MAX_LINES_PER_STREAM = 1000;
  *
  * Optional `opts.createClient` exists for tests that need to inject a
  * fake activity-log client. The default uses the real HTTP adapter.
+ *
+ * Optional `opts.onSessionId` is invoked synchronously immediately
+ * after `sessionId` is generated and before any `POST /activity` is
+ * issued. The scheduler (`packages/server/src/scheduler/`) wires this
+ * to capture the cycle's runtime session id so a subsequent
+ * `interrupt` or wall-clock `timeout` can stamp the same id on its
+ * `session_interrupted` / `session_timeout` activity entry. The
+ * callback SHALL NOT throw; runtime exceptions are caught and ignored
+ * so the cycle remains decoupled from observers.
  */
 export interface StartCycleOptions {
   readonly createClient?: (opts: ActivityLogClientOpts) => ActivityLogClient;
+  readonly onSessionId?: (sessionId: string) => void;
 }
 
 export async function startCycle(
@@ -83,6 +93,15 @@ export async function startCycle(
   }
 
   const sessionId = generateUuidV7();
+  if (opts.onSessionId !== undefined) {
+    try {
+      opts.onSessionId(sessionId);
+    } catch {
+      // Observer error is non-fatal: the cycle owns the id; observers
+      // (e.g., the scheduler) opt in to receive it for labelling and
+      // must not be able to crash the cycle.
+    }
+  }
   const create = opts.createClient ?? createActivityLogClient;
   const activity = create({
     serverUrl: params.serverUrl,

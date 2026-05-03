@@ -3,11 +3,38 @@
  * `AbortSignal` (the production code path is exercised by step 13's
  * end-to-end tests; here we cover argv shape, exit codes, and the happy
  * path without touching `Deno.addSignalListener`).
+ *
+ * Scheduler-bootstrap cross-walk against
+ * `openspec/changes/cron-scheduler-with-pause/specs/scheduler/spec.md`
+ * and `…/specs/orchestration-server/spec.md`:
+ *
+ *  - "runServer constructs the scheduler once, calls start() exactly
+ *    once, and stops it before server.abort() on shutdown" covers:
+ *      • scheduler/spec.md "runServer instantiates and starts the
+ *        scheduler exactly once at bootstrap"
+ *      • scheduler/spec.md "runServer's abort handler calls
+ *        scheduler.stop() before resolving"
+ *      • orchestration-server/spec.md "Shutdown calls
+ *        scheduler.stop() before resolving"
+ *  - "runServer forwards schedules and timeouts from project.yaml to
+ *    the scheduler" covers:
+ *      • orchestration-server/spec.md "Boot against a project with a
+ *        roster" (config-key forwarding clause)
+ *
+ * The "Boot against a project with no roster" scenario is exercised by
+ * the existing "runServer prints the bound URL and exits 0 …" test,
+ * which boots against an empty roster and asserts the server replies.
  */
 
 import { assertEquals, assertMatch } from "@std/assert";
 import { FileConfigStore, resolveGlobalPaths, resolveProjectPaths } from "@keni/shared";
 import { parseRunServerArgs, runServer, UsageError } from "./runServer.ts";
+import type {
+  InterruptResult,
+  Scheduler,
+  SchedulerDeps,
+  SchedulerOpts,
+} from "./scheduler/scheduler.ts";
 
 async function makeKeniInitialised(
   agents: readonly { readonly id: string; readonly role: string }[] = [],
@@ -176,6 +203,144 @@ Deno.test("runServer seeds /agents from the project.yaml roster", async () => {
     assertEquals(exit, 0);
   } finally {
     await env.cleanup();
+  }
+});
+
+Deno.test("runServer constructs the scheduler once, calls start() exactly once, and stops it before server.abort() on shutdown", async () => {
+  const env = await makeKeniInitialised([
+    { id: "alice", role: "engineer" },
+  ]);
+  try {
+    interface SchedulerCall {
+      readonly deps: SchedulerDeps;
+      readonly opts: SchedulerOpts;
+    }
+    const calls: SchedulerCall[] = [];
+    const events: string[] = [];
+    let factoryInvocations = 0;
+    let startCount = 0;
+    let stopCount = 0;
+    let stopResolved = false;
+
+    const stubScheduler: Scheduler = {
+      start(): void {
+        startCount += 1;
+        events.push("scheduler.start");
+      },
+      async stop(): Promise<void> {
+        stopCount += 1;
+        events.push("scheduler.stop:enter");
+        await Promise.resolve();
+        stopResolved = true;
+        events.push("scheduler.stop:resolve");
+      },
+      interrupt(): Promise<InterruptResult> {
+        return Promise.resolve({ interrupted: false, reason: "no_active_cycle" });
+      },
+      registerRunner(): void {},
+    };
+
+    const ctrl = new AbortController();
+    const outLines: string[] = [];
+    const promise = runServer(
+      ["--project", env.root, "--port", "0"],
+      {
+        out: (m) => outLines.push(m),
+        err: () => {},
+        shutdownSignal: ctrl.signal,
+        makeScheduler: (deps, opts) => {
+          factoryInvocations += 1;
+          calls.push({ deps, opts });
+          return stubScheduler;
+        },
+      },
+    );
+
+    await waitFor(() => outLines.some((l) => l.startsWith("Keni server running at ")));
+    assertEquals(factoryInvocations, 1, "scheduler factory must be called exactly once");
+    assertEquals(startCount, 1, "scheduler.start() must be called exactly once");
+    assertEquals(calls[0]!.opts.agents.length, 1);
+    assertEquals(calls[0]!.opts.agents[0]!.id, "alice");
+    assertMatch(calls[0]!.opts.serverUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assertEquals(calls[0]!.opts.projectName, "test-project");
+
+    ctrl.abort();
+    const exit = await promise;
+    assertEquals(exit, 0);
+    assertEquals(stopCount, 1, "scheduler.stop() must be called exactly once");
+    assertEquals(
+      stopResolved,
+      true,
+      "runServer must await scheduler.stop() to completion before resolving",
+    );
+    assertEquals(
+      events[0],
+      "scheduler.start",
+      "scheduler.start must precede scheduler.stop",
+    );
+    assertEquals(events.includes("scheduler.stop:resolve"), true);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("runServer forwards schedules and timeouts from project.yaml to the scheduler", async () => {
+  const root = await Deno.makeTempDir({ prefix: "keni-server-runserver-cfg-" });
+  const home = await Deno.makeTempDir({ prefix: "keni-server-runserver-cfg-home-" });
+  try {
+    const projectPaths = resolveProjectPaths(root);
+    const globalPaths = resolveGlobalPaths(home);
+    await Deno.mkdir(projectPaths.keni, { recursive: true });
+    await Deno.mkdir(projectPaths.tickets, { recursive: true });
+    await Deno.mkdir(projectPaths.prs, { recursive: true });
+    await Deno.mkdir(projectPaths.activity, { recursive: true });
+    const config = new FileConfigStore(projectPaths, globalPaths);
+    await config.writeProjectConfig({
+      project_id: "00000000-0000-4000-8000-000000000002",
+      name: "cfg-project",
+      agents: [{ id: "alice", role: "engineer" }],
+      schedules: { engineer: "30s" },
+      timeouts: { engineer: "20m" },
+    });
+
+    let captured: SchedulerOpts | null = null;
+    const stubScheduler: Scheduler = {
+      start() {},
+      stop: () => Promise.resolve(),
+      interrupt: () =>
+        Promise.resolve<InterruptResult>({
+          interrupted: false,
+          reason: "no_active_cycle",
+        }),
+      registerRunner() {},
+    };
+
+    const ctrl = new AbortController();
+    const outLines: string[] = [];
+    const promise = runServer(
+      ["--project", root, "--port", "0"],
+      {
+        out: (m) => outLines.push(m),
+        err: () => {},
+        shutdownSignal: ctrl.signal,
+        homeDir: home,
+        makeScheduler: (_deps, opts) => {
+          captured = opts;
+          return stubScheduler;
+        },
+      },
+    );
+    await waitFor(() => outLines.some((l) => l.startsWith("Keni server running at ")));
+    ctrl.abort();
+    await promise;
+
+    assertEquals(captured !== null, true);
+    const opts = captured! as SchedulerOpts;
+    assertEquals(opts.schedules?.engineer, "30s");
+    assertEquals(opts.timeouts?.engineer, "20m");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+    await Deno.remove(home, { recursive: true });
   }
 });
 

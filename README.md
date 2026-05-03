@@ -114,7 +114,9 @@ curl -H "X-Keni-Role: user" http://127.0.0.1:<port>/agents
 
 `POST /agents/:id/pause` and `POST /agents/:id/resume` flip the `paused` flag (user-only, idempotent
 — they emit `agent.state_changed` only when the flag actually changes). The flag is the seam
-consumed by step 08's scheduler; until that lands, paused agents are flagged but not yet gated.
+consumed by [the scheduler](#scheduler): a paused agent's tick is silently skipped on every fire,
+and an in-flight cycle is allowed to complete (pause is a scheduling preference; `interrupt` is the
+abort verb).
 
 A live event stream is at `GET /events` (WebSocket). Every successful write on `/tickets`, `/prs`,
 `/activity`, and `/agents/:id/{pause,resume}` is mirrored to every connected subscriber as one
@@ -198,6 +200,74 @@ pinned by structural tests:
 Step 09 (engineer specialisation) is the first concrete consumer; step 17 (PO mode selection) will
 plug a four-mode arbiter into the precheck. Both inherit the cycle without modifying it.
 
+### Scheduler
+
+`@keni/server`'s in-process scheduler — owned by `runServer` and started immediately after the HTTP
+listener binds — drives one role-runtime cycle per agent per tick. Source lives at
+[`packages/server/src/scheduler/`](./packages/server/src/scheduler/) and the canonical contract is
+the
+[`scheduler` capability spec](./openspec/changes/cron-scheduler-with-pause/specs/scheduler/spec.md).
+
+Three invariants frame everything else:
+
+1. **In-process, single-server-per-project, no replay.** Tick state is in-memory only; on server
+   restart the scheduler resumes ticking from "now" with no replay of missed ticks. Pause / resume
+   flags also reset on restart (the activity log on disk is the durable record).
+2. **Pause is a scheduling preference; `interrupt` is the abort verb.** Setting `paused: true`
+   silently skips the next tick (no LLM tokens spent, no activity entry); it does not affect an
+   in-flight cycle. `scheduler.interrupt(agentId)` aborts the in-flight cycle's `params.signal`
+   immediately and appends a `session_interrupted` row carrying the cycle's `session_id`.
+3. **Role-agnostic core.** The scheduler imports zero role-specific code; every role-shaped concern
+   (precheck, prompt resolver, coding-agent invoker, env allowlist, MCP config) is supplied by the
+   `AgentRunner` plug-in registered against the `AgentRunnerRegistry`. Step 09 (engineer
+   specialisation) and step 17 (PO mode selection) `register(...)` their runners against this
+   registry; tests register a fake runner.
+
+The scheduler reads two `project.yaml` keys to size each agent's tick:
+
+```yaml
+# .keni/project.yaml
+schedules:
+  engineer: "5m" # cadence: any agent with role=engineer ticks every 5 minutes
+  alice: "30s" # per-agent override beats the per-role entry
+  qa: "*/2 * * * *" # simple "*/N * * * *" cron form is also accepted
+timeouts:
+  engineer: "30m" # hard wall-clock cap for one engineer cycle
+  alice: 600000 # bare integer is interpreted as milliseconds
+```
+
+Both keys accept duration shorthands (`"500ms"`, `"5s"`, `"30m"`, `"1h"`), bare positive integers
+(milliseconds), and the cron pattern `"*/N * * * *"` for `schedules` only. Resolution order is
+`map[agentId] ?? map[role] ?? defaultForRole(role)`. Defaults: cadence `60_000` ms; timeout
+`30 * 60 * 1_000` ms (engineer / qa) and `5 * 60 * 1_000` ms (po). An unparseable value logs a
+single warning and falls back to the role default.
+
+When a cycle exceeds its `timeoutMs`, the scheduler aborts the cycle's `params.signal` and appends a
+`session_timeout` row carrying the cycle's `session_id` (the runtime separately emits its own
+`session_end` with `terminated_by: "sigterm"` once the subprocess settles — both rows are on the
+same `session_id` and tell complementary halves of the story). The scheduler does not auto-revert
+ticket status on interrupt or timeout — that decision belongs to a future re-checkout flow.
+
+The plug-in surface for roles is one interface:
+
+```typescript
+import type { AgentRunner } from "@keni/server/scheduler/registry";
+
+const engineerRunner: AgentRunner = {
+  role: "engineer",
+  precheck: async (ctx) => /* "skip" | "proceed" */,
+  promptResolver: (ctx) => /* { name, body } from a TS string constant */,
+  codingAgentInvoker: createSubprocessCodingAgentInvoker(...),
+  mcpServerConfig: { command: "deno", args: [...] },
+};
+
+scheduler.registerRunner(engineerRunner);
+```
+
+Steps 09 and 17 land the production engineer and PO runners; the integration test at
+[`packages/server/src/scheduler/integration_test.ts`](./packages/server/src/scheduler/integration_test.ts)
+exercises the end-to-end flow against a fake runner today.
+
 ## Repository layout
 
 ```
@@ -215,7 +285,7 @@ keni/
 ├── initial-implementation-plan/  # step-by-step /opsx:propose inputs (prototype → MVP)
 └── packages/
     ├── cli/                  # @keni/cli — the `keni` command, project init and server boot
-    ├── server/               # @keni/server — orchestration server (REST + WebSocket APIs) and engineer MCP server (stdio)
+    ├── server/               # @keni/server — orchestration server (REST + WebSocket APIs), engineer MCP server (stdio), and the in-process role-runtime scheduler (`scheduler/` subdir)
     ├── spa/                  # @keni/spa — browser dashboard (board, agent roster, chat, spec viewer)
     ├── role-runtimes/        # @keni/role-runtimes — common cycle wrapper plus per-role specialisations (engineer/QA/PO)
     └── shared/               # @keni/shared — types, storage interfaces, utilities

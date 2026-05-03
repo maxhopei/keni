@@ -36,6 +36,16 @@ export interface ProjectConfig {
   readonly agents?: readonly AgentConfig[];
   /** Cron-like schedules per agent or role. */
   readonly schedules?: Readonly<Record<string, string>>;
+  /**
+   * Per-role / per-agent session timeouts consumed by the scheduler
+   * (`step 08 — cron-scheduler-with-pause`). Key is an agent id or a role;
+   * value is a duration shorthand (`"5s"`, `"30m"`, `"1h"`) or a positive
+   * integer interpreted as milliseconds. Resolution order is
+   * `timeouts[agentId] ?? timeouts[role] ?? defaultForRole(role)`. The
+   * `scheduler` capability spec governs the parsing rules and per-role
+   * defaults; the storage layer round-trips the field verbatim.
+   */
+  readonly timeouts?: Readonly<Record<string, string | number>>;
 }
 
 /**

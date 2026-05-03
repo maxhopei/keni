@@ -30,6 +30,7 @@ import type {
 } from "@keni/shared";
 import type { AgentRuntimeStateStore } from "./agentState.ts";
 import type { EventBus } from "./eventBus.ts";
+import type { Scheduler } from "./scheduler/scheduler.ts";
 import { errorBoundary } from "./middleware/errorBoundary.ts";
 import { requestId } from "./middleware/requestId.ts";
 import { requestLog } from "./middleware/requestLog.ts";
@@ -56,6 +57,14 @@ export interface ServerDeps {
   readonly eventBus: EventBus;
   /** In-memory store for the project's agent roster + transient runtime state. */
   readonly agentRuntimeStateStore: AgentRuntimeStateStore;
+  /**
+   * Optional handle to the in-process role-runtime scheduler. `runServer`
+   * instantiates it once at bootstrap and forwards it here so future route
+   * handlers (step 12's interrupt endpoint) can call `scheduler.interrupt(agentId)`
+   * directly without re-resolving any dependency. The scheduler is owned by
+   * `runServer`'s lifecycle (`spec.md` §6.1, scheduler capability spec).
+   */
+  readonly scheduler?: Scheduler;
 }
 
 /** Per-process server options (resolved by `runServer` from CLI flags). */

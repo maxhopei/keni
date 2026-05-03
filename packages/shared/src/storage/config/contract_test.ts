@@ -33,6 +33,7 @@ const SAMPLE_PROJECT: ProjectConfig = {
   stack: "deno-rest",
   agents: [{ id: "alice", role: "engineer" }],
   schedules: { engineer: "*/5 * * * *" },
+  timeouts: { engineer: "30m", po: 300000 },
 };
 
 export function runConfigStoreContract(
