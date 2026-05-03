@@ -8,7 +8,12 @@
  */
 
 import { z } from "zod";
-import type { PRCreateRequest, PRIntentPatchRequest, PRTransitionRequest } from "@keni/shared";
+import type {
+  MergePrResponse,
+  PRCreateRequest,
+  PRIntentPatchRequest,
+  PRTransitionRequest,
+} from "@keni/shared";
 
 /** Every legal `PRStatus` literal — keep in lock-step with `PRStatus`. */
 export const PR_STATUSES = [
@@ -37,4 +42,14 @@ export const PRIntentPatchRequestSchema: z.ZodType<PRIntentPatchRequest> = z.obj
 export const PRTransitionRequestSchema: z.ZodType<PRTransitionRequest> = z.object({
   from: PRStatusSchema,
   to: PRStatusSchema,
+}).strict();
+
+/**
+ * zod schema for {@link MergePrResponse}. Pins the `merge_commit_sha`
+ * field as a 40-character lower-case hex string (the canonical form
+ * `git rev-parse HEAD` returns). Used by the merge endpoint test and
+ * by integration tests that round-trip the success envelope.
+ */
+export const MergePrResponseSchema: z.ZodType<MergePrResponse> = z.object({
+  merge_commit_sha: z.string().regex(/^[0-9a-f]{40}$/),
 }).strict();

@@ -66,6 +66,26 @@ export class RoleNotOwnerError extends Error {
 }
 
 /**
+ * Raised by the `POST /prs/:id/merge` handler when `git merge --ff-only`
+ * exits non-zero because the PR's source branch is not a fast-forward of
+ * `main`. Mapped to `409 merge_conflict` with `error.details: { branch,
+ * base, git_stderr }`.
+ */
+export class MergeConflictError extends Error {
+  override readonly name = "MergeConflictError";
+  readonly branch: string;
+  readonly base: string;
+  readonly gitStderr: string;
+
+  constructor(branch: string, base: string, gitStderr: string) {
+    super(`Branch '${branch}' is not a fast-forward of '${base}'`);
+    this.branch = branch;
+    this.base = base;
+    this.gitStderr = gitStderr;
+  }
+}
+
+/**
  * Raised by the `roleIdentity` middleware when `X-Keni-Role` is missing or
  * carries a value outside the `Role` union. Mapped to `400 missing_role`
  * with `error.details: { received }` (received may be `undefined` when the
@@ -141,6 +161,14 @@ export function mapErrorToResponse(err: unknown, projectId: string): MappedRespo
     return envelope(403, "role_not_owner", err.message, projectId, {
       role: err.role,
       target: err.target,
+    });
+  }
+
+  if (err instanceof MergeConflictError) {
+    return envelope(409, "merge_conflict", err.message, projectId, {
+      branch: err.branch,
+      base: err.base,
+      git_stderr: err.gitStderr,
     });
   }
 

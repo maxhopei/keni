@@ -16,6 +16,7 @@ import type {
   ActivityAppendRequest,
   ActivityEntryResponse,
   ActivityFilter,
+  MergePrResponse,
   TicketResponse,
   TicketStatus,
   TicketSummaryResponse,
@@ -44,6 +45,7 @@ function makeFakeHttpClient(): { client: McpHttpClient; calls: RecordedCall[] } 
       trip<ActivityEntryResponse>("appendActivity"),
     queryActivity: (_filter: ActivityFilter, _limit: number) =>
       trip<readonly ActivityEntryResponse[]>("queryActivity"),
+    mergePr: (_prId: string) => trip<MergePrResponse>("mergePr"),
   };
   return { client, calls };
 }

@@ -21,6 +21,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpHttpClient } from "./httpClient.ts";
 import { registerActivityTools } from "./tools/activity.ts";
+import { registerPrTools } from "./tools/prs.ts";
 import { registerTicketTools } from "./tools/tickets.ts";
 import { registerWorkspaceTools } from "./tools/workspace.ts";
 
@@ -67,6 +68,7 @@ export function createMcpServer(
   registerTicketTools(server, deps);
   registerActivityTools(server, deps);
   registerWorkspaceTools(server, deps);
+  registerPrTools(server, deps);
 
   return server;
 }

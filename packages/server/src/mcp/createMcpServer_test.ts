@@ -7,7 +7,7 @@
  * from `mcp-engineer-surface/spec.md`. A silent rewording of any tool
  * description fails CI.
  *
- * The "exactly seven tools" assertion is the second drift detector —
+ * The "exactly eight tools" assertion is the second drift detector —
  * a missing or extra `registerTool` call fails the test.
  */
 
@@ -16,6 +16,7 @@ import type {
   ActivityAppendRequest,
   ActivityEntryResponse,
   ActivityFilter,
+  MergePrResponse,
   TicketResponse,
   TicketStatus,
   TicketSummaryResponse,
@@ -30,6 +31,7 @@ import {
 } from "./tools/tickets.ts";
 import { APPEND_ACTIVITY_ENTRY_DESCRIPTION, QUERY_ACTIVITY_DESCRIPTION } from "./tools/activity.ts";
 import { GET_WORKSPACE_PATH_DESCRIPTION } from "./tools/workspace.ts";
+import { MERGE_PR_DESCRIPTION } from "./tools/prs.ts";
 
 /**
  * Hand-encoded copy of every tool's description, lifted from
@@ -52,6 +54,8 @@ const SPEC_DESCRIPTIONS: Record<string, string> = {
     "Queries the activity log with optional filters and a per-call limit (default 200, hard ceiling 1000). Use a narrow from/to window to keep results focused.",
   get_workspace_path:
     "Returns the absolute filesystem path of this engineer's workspace clone. The path is read once at startup and is constant for the life of this MCP-server process.",
+  merge_pr:
+    "Fast-forward merges an approved PR's source branch onto `main` and returns the resulting merge commit SHA. Engineers only; non-fast-forward attempts return `merge_conflict` and require a rebase.",
 };
 
 function makeFakeHttpClient(): McpHttpClient {
@@ -102,6 +106,11 @@ function makeFakeHttpClient(): McpHttpClient {
     ): Promise<readonly ActivityEntryResponse[]> {
       return Promise.resolve([sampleEntry]);
     },
+    mergePr(_prId: string): Promise<MergePrResponse> {
+      return Promise.resolve({
+        merge_commit_sha: "0123456789abcdef0123456789abcdef01234567",
+      });
+    },
   };
 }
 
@@ -116,7 +125,7 @@ function getRegisteredTools(server: object): Record<string, RegisteredTool> {
 
 const FAKE_EXTRA = { signal: new AbortController().signal };
 
-Deno.test("createMcpServer registers exactly seven tools, named per the spec", () => {
+Deno.test("createMcpServer registers exactly eight tools, named per the spec", () => {
   const server = createMcpServer({
     httpClient: makeFakeHttpClient(),
     agentId: "alice",
@@ -128,13 +137,14 @@ Deno.test("createMcpServer registers exactly seven tools, named per the spec", (
     "append_activity_entry",
     "get_workspace_path",
     "list_tickets",
+    "merge_pr",
     "query_activity",
     "read_ticket",
     "transition_ticket_status",
     "update_ticket_body",
   ];
   assertEquals(names, expected);
-  assertEquals(names.length, 7);
+  assertEquals(names.length, 8);
 });
 
 Deno.test("each tool's description matches the hand-encoded spec copy verbatim (drift detector)", () => {
@@ -188,6 +198,7 @@ Deno.test("description constants in source match the hand-encoded copies (drift 
   assertEquals(APPEND_ACTIVITY_ENTRY_DESCRIPTION, SPEC_DESCRIPTIONS.append_activity_entry);
   assertEquals(QUERY_ACTIVITY_DESCRIPTION, SPEC_DESCRIPTIONS.query_activity);
   assertEquals(GET_WORKSPACE_PATH_DESCRIPTION, SPEC_DESCRIPTIONS.get_workspace_path);
+  assertEquals(MERGE_PR_DESCRIPTION, SPEC_DESCRIPTIONS.merge_pr);
 });
 
 Deno.test("createMcpServer is pure — construction performs no fetch / no Deno.stat", () => {

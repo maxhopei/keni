@@ -211,12 +211,13 @@ Deno.test("runMcpServer happy path — connects via in-memory transport and exit
   await client.connect(clientTransport);
 
   const tools = await client.listTools();
-  assertEquals(tools.tools.length, 7);
+  assertEquals(tools.tools.length, 8);
   const toolNames = tools.tools.map((t: { name: string }) => t.name).sort();
   assertEquals(toolNames, [
     "append_activity_entry",
     "get_workspace_path",
     "list_tickets",
+    "merge_pr",
     "query_activity",
     "read_ticket",
     "transition_ticket_status",

@@ -31,3 +31,6 @@ export {
 
 export type { GetWorkspacePathInput, WorkspacePathResponse } from "./workspace.ts";
 export { GetWorkspacePathInputSchema } from "./workspace.ts";
+
+export type { MergePrInput } from "./prs.ts";
+export { MergePrInputSchema, PR_ID_PATTERN } from "./prs.ts";

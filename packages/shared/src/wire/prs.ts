@@ -68,3 +68,24 @@ export interface PRListResponse {
   readonly data: readonly PRSummaryResponse[];
   readonly project_id: string;
 }
+
+/**
+ * Response data for `POST /prs/:id/merge` on success. The endpoint
+ * fast-forward-merges the PR's source branch onto `main` (orchestration
+ * server spec §"`POST /prs/:id/merge` …"); on a non-fast-forward the
+ * server responds `409 merge_conflict` instead of this shape.
+ *
+ * `merge_commit_sha` is the SHA of the `main` branch HEAD after the
+ * merge — for a true fast-forward this is identical to the source
+ * branch tip; the field exists separately so a future non-FF merge
+ * strategy keeps the wire shape stable.
+ */
+export interface MergePrResponse {
+  readonly merge_commit_sha: string;
+}
+
+/** Envelope for `POST /prs/:id/merge` on success. */
+export interface MergePrEnvelope {
+  readonly data: MergePrResponse;
+  readonly project_id: string;
+}

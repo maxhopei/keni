@@ -6,8 +6,14 @@
 
 import { assertEquals, assertThrows } from "@std/assert";
 import { z } from "zod";
-import type { PRCreateRequest, PRIntentPatchRequest, PRTransitionRequest } from "@keni/shared";
+import type {
+  MergePrResponse,
+  PRCreateRequest,
+  PRIntentPatchRequest,
+  PRTransitionRequest,
+} from "@keni/shared";
 import {
+  MergePrResponseSchema,
   PR_STATUSES,
   PRCreateRequestSchema,
   PRIntentPatchRequestSchema,
@@ -25,6 +31,7 @@ type _CheckIntent = Expect<
 type _CheckTransition = Expect<
   Equal<z.infer<typeof PRTransitionRequestSchema>, PRTransitionRequest>
 >;
+type _CheckMerge = Expect<Equal<z.infer<typeof MergePrResponseSchema>, MergePrResponse>>;
 
 Deno.test("PRCreateRequestSchema accepts the documented good example", () => {
   const parsed = PRCreateRequestSchema.parse({
@@ -87,4 +94,39 @@ Deno.test("PRTransitionRequestSchema rejects an unknown status literal", () => {
 
 Deno.test("PR_STATUSES enumerates the §4.1 PR lifecycle in order", () => {
   assertEquals(PR_STATUSES, ["open", "in_review", "has_comments", "approved", "merged"]);
+});
+
+Deno.test("MergePrResponseSchema accepts a 40-char lower-case hex SHA", () => {
+  const sha = "abcdef0123456789abcdef0123456789abcdef01";
+  const parsed = MergePrResponseSchema.parse({ merge_commit_sha: sha });
+  assertEquals(parsed.merge_commit_sha, sha);
+});
+
+Deno.test("MergePrResponseSchema rejects an empty SHA", () => {
+  assertThrows(() => MergePrResponseSchema.parse({ merge_commit_sha: "" }), z.ZodError);
+});
+
+Deno.test("MergePrResponseSchema rejects a non-hex SHA", () => {
+  assertThrows(
+    () => MergePrResponseSchema.parse({ merge_commit_sha: "g".repeat(40) }),
+    z.ZodError,
+  );
+});
+
+Deno.test("MergePrResponseSchema rejects a too-short SHA", () => {
+  assertThrows(
+    () => MergePrResponseSchema.parse({ merge_commit_sha: "abcdef0123" }),
+    z.ZodError,
+  );
+});
+
+Deno.test("MergePrResponseSchema rejects extra keys (.strict())", () => {
+  assertThrows(
+    () =>
+      MergePrResponseSchema.parse({
+        merge_commit_sha: "0".repeat(40),
+        extra: "nope",
+      }),
+    z.ZodError,
+  );
 });

@@ -5,6 +5,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { z } from "zod";
 import type { ActivityAppendRequest, ActivityFilter } from "@keni/shared";
+import { PR_MERGED_ACTIVITY_EVENT } from "@keni/shared";
 import { ActivityAppendRequestSchema, parseActivityQuery } from "./activity.ts";
 
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true
@@ -97,4 +98,24 @@ Deno.test("parseActivityQuery throws ZodError on a malformed `from`", () => {
     () => parseActivityQuery(new URLSearchParams({ from: "yesterday" })),
     z.ZodError,
   );
+});
+
+Deno.test("PR_MERGED_ACTIVITY_EVENT is the literal `pr_merged`", () => {
+  assertEquals(PR_MERGED_ACTIVITY_EVENT, "pr_merged");
+});
+
+Deno.test("ActivityAppendRequestSchema accepts a pr_merged entry shape", () => {
+  const parsed = ActivityAppendRequestSchema.parse({
+    session_id: "sess-merge",
+    agent: "alice",
+    role: "engineer",
+    event: PR_MERGED_ACTIVITY_EVENT,
+    summary: "Merged PR pr-0001 as 0123…",
+    refs: {
+      pr_id: "pr-0001",
+      branch: "ticket-0001",
+      merge_commit_sha: "0123456789abcdef0123456789abcdef01234567",
+    },
+  });
+  assertEquals(parsed.event, "pr_merged");
 });

@@ -28,6 +28,7 @@ import { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "./prompts/plac
 import { startCycle } from "./startCycle.ts";
 import { createSubprocessCodingAgentInvoker } from "./codingAgentInvoker.ts";
 import type { RoleCycleParams } from "./types.ts";
+import { FakeWorkspaceProvisioner } from "../engineer/workspace/fakes/fakeWorkspaceProvisioner.ts";
 
 const PROJECT_ID = "00000000-0000-4000-8000-0000000000bb";
 const FIXTURE_PATH = fromFileUrl(
@@ -69,6 +70,10 @@ async function setup(): Promise<IntegrationContext> {
       err: () => {},
       homeDir: home,
       shutdownSignal: ctrl.signal,
+      // Cycle-level integration test — the workspace surface is not
+      // exercised here, so a fake provisioner skips the real
+      // git-clone plumbing.
+      workspaceProvisioner: new FakeWorkspaceProvisioner({ homeDir: home }),
     },
   );
   const start = performance.now();

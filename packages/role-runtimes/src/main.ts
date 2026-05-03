@@ -53,3 +53,45 @@ export { RoleRuntimeError, RoleRuntimeHttpError } from "./common/types.ts";
  * once those land, callers should switch off these constants.
  */
 export { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "./common/prompts/placeholder.ts";
+
+/**
+ * Engineer-runtime public surface (introduced by the
+ * `engineer-runtime-and-workspace` change). The {@link WorkspaceProvisioner}
+ * interface is the seam between the engineer runtime and the per-agent
+ * sparse-checkout clone; {@link GitWorkspaceProvisioner} is the
+ * production default; {@link FakeWorkspaceProvisioner} is the test
+ * fake. {@link WorkspaceProvisioningError} is the typed error every
+ * workspace operation rejects with.
+ */
+export type {
+  WorkspaceLogger,
+  WorkspaceLogLevel,
+  WorkspaceProvisioner,
+  WorkspaceProvisioningErrorCode,
+  WorkspaceProvisioningErrorDetails,
+} from "./engineer/workspace/interface.ts";
+export { WorkspaceProvisioningError } from "./engineer/workspace/interface.ts";
+
+export type {
+  FakeWorkspaceProvisionerCall,
+  FakeWorkspaceProvisionerOpts,
+} from "./engineer/workspace/fakes/fakeWorkspaceProvisioner.ts";
+export { FakeWorkspaceProvisioner } from "./engineer/workspace/fakes/fakeWorkspaceProvisioner.ts";
+
+export type { GitWorkspaceProvisionerOpts } from "./engineer/workspace/git.ts";
+export { GitWorkspaceProvisioner, SPARSE_CHECKOUT_PATTERN } from "./engineer/workspace/git.ts";
+
+export { ENGINEER_PROMPT_BODY, ENGINEER_PROMPT_NAME } from "./engineer/prompts/engineer.ts";
+
+export type {
+  BuildEngineerMcpServerConfigOpts,
+  EngineerActivityHttpClient,
+  EngineerAgentRunner,
+  EngineerRunnerDeps,
+  EngineerRunnerOpts,
+} from "./engineer/runner.ts";
+export {
+  buildEngineerMcpServerConfig,
+  createEngineerRunner,
+  orderEngineerTickets,
+} from "./engineer/runner.ts";

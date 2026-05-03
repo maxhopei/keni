@@ -30,6 +30,8 @@ export type {
 } from "./tickets.ts";
 
 export type {
+  MergePrEnvelope,
+  MergePrResponse,
   PRCreateRequest,
   PREnvelope,
   PRIntentPatchRequest,
@@ -45,6 +47,7 @@ export type {
   ActivityEnvelope,
   ActivityQueryResponse,
 } from "./activity.ts";
+export { PR_MERGED_ACTIVITY_EVENT } from "./activity.ts";
 
 export type { AgentEnvelope, AgentListResponse, AgentResponse, AgentStatus } from "./agents.ts";
 export { AGENT_STATUSES, isAgentStatus } from "./agents.ts";

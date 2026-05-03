@@ -28,6 +28,7 @@
 
 import { assertEquals, assertMatch } from "@std/assert";
 import { FileConfigStore, resolveGlobalPaths, resolveProjectPaths } from "@keni/shared";
+import { FakeWorkspaceProvisioner, WorkspaceProvisioningError } from "@keni/role-runtimes";
 import { parseRunServerArgs, runServer, UsageError } from "./runServer.ts";
 import type {
   InterruptResult,
@@ -172,7 +173,12 @@ Deno.test("runServer seeds /agents from the project.yaml roster", async () => {
     const ctrl = new AbortController();
     const promise = runServer(
       ["--project", env.root, "--port", "0"],
-      { out: (m) => outLines.push(m), err: () => {}, shutdownSignal: ctrl.signal },
+      {
+        out: (m) => outLines.push(m),
+        err: () => {},
+        shutdownSignal: ctrl.signal,
+        workspaceProvisioner: new FakeWorkspaceProvisioner(),
+      },
     );
     await waitFor(() => outLines.some((l) => l.startsWith("Keni server running at ")));
     const banner = outLines.find((l) => l.startsWith("Keni server running at "))!;
@@ -248,6 +254,7 @@ Deno.test("runServer constructs the scheduler once, calls start() exactly once, 
         out: (m) => outLines.push(m),
         err: () => {},
         shutdownSignal: ctrl.signal,
+        workspaceProvisioner: new FakeWorkspaceProvisioner(),
         makeScheduler: (deps, opts) => {
           factoryInvocations += 1;
           calls.push({ deps, opts });
@@ -324,6 +331,7 @@ Deno.test("runServer forwards schedules and timeouts from project.yaml to the sc
         err: () => {},
         shutdownSignal: ctrl.signal,
         homeDir: home,
+        workspaceProvisioner: new FakeWorkspaceProvisioner(),
         makeScheduler: (_deps, opts) => {
           captured = opts;
           return stubScheduler;
@@ -353,3 +361,192 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+// --- Engineer-wiring tests (cron-scheduler-with-pause + engineer-runtime
+//     orchestration-server delta). Validate that runServer:
+//     • calls ensureProvisioned per engineer in roster order before
+//       Deno.serve starts accepting any engineer-driven traffic;
+//     • registers the engineer runner exactly once per engineer when
+//       `makeEngineerRunner` is supplied;
+//     • exits 1 with a clear stderr message on a provisioning failure
+//       and never starts the scheduler;
+//     • is a clean no-op when the roster contains zero engineers.
+
+Deno.test("runServer awaits ensureProvisioned for every engineer before scheduler.start()", async () => {
+  const env = await makeKeniInitialised([
+    { id: "alice", role: "engineer" },
+    { id: "bob", role: "engineer" },
+    { id: "qa-1", role: "qa" },
+  ]);
+  try {
+    const provisioner = new FakeWorkspaceProvisioner();
+    const events: string[] = [];
+
+    const stubScheduler: Scheduler = {
+      start() {
+        events.push("scheduler.start");
+      },
+      stop: () => Promise.resolve(),
+      interrupt: () =>
+        Promise.resolve<InterruptResult>({
+          interrupted: false,
+          reason: "no_active_cycle",
+        }),
+      registerRunner() {},
+    };
+
+    const ctrl = new AbortController();
+    const outLines: string[] = [];
+    const promise = runServer(
+      ["--project", env.root, "--port", "0"],
+      {
+        out: (m) => outLines.push(m),
+        err: () => {},
+        shutdownSignal: ctrl.signal,
+        workspaceProvisioner: provisioner,
+        makeScheduler: () => stubScheduler,
+      },
+    );
+
+    await waitFor(() => events.includes("scheduler.start"));
+
+    const ensureCalls = provisioner.calls.filter((c) => c.method === "ensureProvisioned");
+    assertEquals(ensureCalls.length, 2, "ensureProvisioned must be called per engineer");
+    assertEquals(ensureCalls[0]!.args[1], "alice");
+    assertEquals(ensureCalls[1]!.args[1], "bob");
+
+    ctrl.abort();
+    const exit = await promise;
+    assertEquals(exit, 0);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("runServer registers an engineer runner per engineer when makeEngineerRunner is supplied", async () => {
+  const env = await makeKeniInitialised([
+    { id: "alice", role: "engineer" },
+  ]);
+  try {
+    const provisioner = new FakeWorkspaceProvisioner();
+    const registered: string[] = [];
+
+    const ctrl = new AbortController();
+    const outLines: string[] = [];
+    const promise = runServer(
+      ["--project", env.root, "--port", "0"],
+      {
+        out: (m) => outLines.push(m),
+        err: () => {},
+        shutdownSignal: ctrl.signal,
+        workspaceProvisioner: provisioner,
+        makeEngineerRunner: (input) => {
+          registered.push(input.agentConfig.id);
+          return {
+            role: "engineer",
+            precheck: () => ({ kind: "skip", reason: "no_ticket_to_pick_up" }),
+            promptResolver: () => ({ name: "engineer", body: "stub" }),
+            expectedPromptName: "engineer",
+            codingAgentInvoker: {
+              invoke: () => Promise.resolve({ kind: "completed" as const, exitCode: 0 }),
+            },
+            mcpServerConfig: { command: "true", args: [] },
+          };
+        },
+      },
+    );
+
+    await waitFor(() => outLines.some((l) => l.startsWith("Keni server running at ")));
+    assertEquals(registered, ["alice"]);
+
+    ctrl.abort();
+    const exit = await promise;
+    assertEquals(exit, 0);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("runServer exits 1 with a clear stderr message on ensureProvisioned failure", async () => {
+  const env = await makeKeniInitialised([
+    { id: "alice", role: "engineer" },
+  ]);
+  try {
+    const provisioner = new FakeWorkspaceProvisioner({
+      ensureProvisionedRejection: new WorkspaceProvisioningError(
+        "git_clone_failed",
+        "boom: clone refused",
+      ),
+    });
+    const errLines: string[] = [];
+    let schedulerStarted = false;
+    const stubScheduler: Scheduler = {
+      start() {
+        schedulerStarted = true;
+      },
+      stop: () => Promise.resolve(),
+      interrupt: () =>
+        Promise.resolve<InterruptResult>({
+          interrupted: false,
+          reason: "no_active_cycle",
+        }),
+      registerRunner() {},
+    };
+
+    const code = await runServer(
+      ["--project", env.root, "--port", "0"],
+      {
+        out: () => {},
+        err: (m) => errLines.push(m),
+        workspaceProvisioner: provisioner,
+        makeScheduler: () => stubScheduler,
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(
+      schedulerStarted,
+      false,
+      "scheduler.start must not run after a provisioning failure",
+    );
+    assertEquals(
+      errLines.some((l) => l.includes("alice") && l.includes("boom")),
+      true,
+      `stderr must name the failed engineer and the error message; got: ${
+        JSON.stringify(errLines)
+      }`,
+    );
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("runServer skips engineer-wiring entirely on a roster with zero engineers", async () => {
+  const env = await makeKeniInitialised([
+    { id: "qa-1", role: "qa" },
+    { id: "po-1", role: "po" },
+  ]);
+  try {
+    const provisioner = new FakeWorkspaceProvisioner();
+    const ctrl = new AbortController();
+    const outLines: string[] = [];
+    const promise = runServer(
+      ["--project", env.root, "--port", "0"],
+      {
+        out: (m) => outLines.push(m),
+        err: () => {},
+        shutdownSignal: ctrl.signal,
+        workspaceProvisioner: provisioner,
+      },
+    );
+    await waitFor(() => outLines.some((l) => l.startsWith("Keni server running at ")));
+
+    assertEquals(provisioner.calls.length, 0);
+
+    ctrl.abort();
+    const exit = await promise;
+    assertEquals(exit, 0);
+  } finally {
+    await env.cleanup();
+  }
+});

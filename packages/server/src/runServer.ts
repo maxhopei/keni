@@ -39,11 +39,16 @@ import type {
 import { resolve } from "@std/path";
 import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
 import { createInMemoryEventBus } from "./eventBus.ts";
+import { createMutex, type Mutex } from "./concurrency/mutex.ts";
 import { stdoutLogSink } from "./middleware/requestLog.ts";
 import type { LogSink } from "./middleware/types.ts";
 import { defaultClock } from "./scheduler/clock.ts";
 import { consoleSchedulerLogger, type SchedulerLogger } from "./scheduler/log.ts";
-import { type AgentRunnerRegistry, createAgentRunnerRegistry } from "./scheduler/registry.ts";
+import {
+  type AgentRunner,
+  type AgentRunnerRegistry,
+  createAgentRunnerRegistry,
+} from "./scheduler/registry.ts";
 import {
   createScheduler,
   type Scheduler,
@@ -51,6 +56,12 @@ import {
   type SchedulerOpts,
 } from "./scheduler/scheduler.ts";
 import { startServer } from "./startServer.ts";
+import {
+  GitWorkspaceProvisioner,
+  type WorkspaceLogger,
+  type WorkspaceProvisioner,
+  WorkspaceProvisioningError,
+} from "@keni/role-runtimes";
 
 /** Parsed CLI flags for `runServer`. */
 export interface RunServerArgs {
@@ -118,6 +129,44 @@ export interface RunServerDeps {
     readonly scheduler: Scheduler;
     readonly registry: AgentRunnerRegistry;
   }) => void;
+  /**
+   * Override the {@link WorkspaceProvisioner}. Defaults to
+   * `new GitWorkspaceProvisioner({ homeDir, logger: workspaceLoggerOf(schedulerLogger) })`.
+   * Tests pass a `FakeWorkspaceProvisioner` to assert on
+   * `ensureProvisioned` / `pullMain` / `discardProvisioned` calls without
+   * touching git or the filesystem.
+   */
+  readonly workspaceProvisioner?: WorkspaceProvisioner;
+  /**
+   * Optional shared {@link Mutex} guarding `git merge --ff-only` against
+   * the project repo from `POST /prs/:id/merge`. Defaults to a fresh
+   * in-process mutex created at boot. Tests pass a stub to assert the
+   * merge endpoint serialises through it.
+   */
+  readonly mergeMutex?: Mutex;
+  /**
+   * Build the engineer's `AgentRunner` for `agentConfig`. The default is
+   * to *skip* engineer-runner registration (the merge endpoint, ticket
+   * REST, MCP server, and provisioner all still wire up; the scheduler
+   * simply logs `runner.missing` on engineer ticks until a follow-up
+   * change wires the production coding-agent invoker). Tests pass a
+   * stub returning a deterministic runner so the wiring sequence can
+   * be observed without launching real subprocesses.
+   *
+   * @returns an `AgentRunner` to register, or `null` to skip this engineer.
+   */
+  readonly makeEngineerRunner?: (input: MakeEngineerRunnerInput) => AgentRunner | null;
+}
+
+/** Input bag handed to {@link RunServerDeps.makeEngineerRunner}. */
+export interface MakeEngineerRunnerInput {
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly agentConfig: AgentConfig;
+  readonly serverUrl: string;
+  readonly projectRepoPath: string;
+  readonly provisioner: WorkspaceProvisioner;
+  readonly logger: SchedulerLogger;
 }
 
 /**
@@ -250,6 +299,12 @@ export async function runServer(
   const agentRuntimeStateStore = createInMemoryAgentRuntimeStateStore(roster);
   const schedulerLogger = deps.schedulerLogger ?? consoleSchedulerLogger();
   const registry = (deps.makeRegistry ?? createAgentRunnerRegistry)(schedulerLogger);
+  const provisioner = deps.workspaceProvisioner ??
+    new GitWorkspaceProvisioner({
+      homeDir,
+      logger: workspaceLoggerOf(schedulerLogger),
+    });
+  const mergeMutex = deps.mergeMutex ?? createMutex();
 
   const serverHandle = await startServer(
     {
@@ -260,9 +315,39 @@ export async function runServer(
       logSink,
       eventBus,
       agentRuntimeStateStore,
+      workspaceProvisioner: provisioner,
+      projectRepoPath: parsed.projectDir,
+      mergeMutex,
     },
     { projectId, port: parsed.port, host: parsed.host },
   );
+
+  const engineers = roster.filter((a) => a.role === "engineer");
+  if (engineers.length > 0) {
+    try {
+      await wireEngineers({
+        engineers,
+        projectId,
+        projectName,
+        provisioner,
+        projectRepoPath: parsed.projectDir,
+        serverUrl: serverHandle.url,
+        registry,
+        schedulerLogger,
+        ...(deps.makeEngineerRunner !== undefined
+          ? { makeEngineerRunner: deps.makeEngineerRunner }
+          : {}),
+      });
+    } catch (e) {
+      const failure = e as EngineerWiringFailure;
+      err(
+        `Failed to provision workspace for engineer ${failure.agentId}: ` +
+          `${failure.code} (${failure.cause})`,
+      );
+      await serverHandle.abort();
+      return 1;
+    }
+  }
 
   const scheduler = (deps.makeScheduler ?? createScheduler)(
     {
@@ -288,6 +373,86 @@ export async function runServer(
   await scheduler.stop();
   await serverHandle.abort();
   return 0;
+}
+
+interface WireEngineersInput {
+  readonly engineers: readonly AgentConfig[];
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly provisioner: WorkspaceProvisioner;
+  readonly projectRepoPath: string;
+  readonly serverUrl: string;
+  readonly registry: AgentRunnerRegistry;
+  readonly schedulerLogger: SchedulerLogger;
+  readonly makeEngineerRunner?: (input: MakeEngineerRunnerInput) => AgentRunner | null;
+}
+
+interface EngineerWiringFailure {
+  readonly agentId: string;
+  readonly code: string;
+  readonly cause: string;
+}
+
+async function wireEngineers(input: WireEngineersInput): Promise<void> {
+  for (const agentConfig of input.engineers) {
+    const startedAt = performance.now();
+    try {
+      await input.provisioner.ensureProvisioned(
+        input.projectId,
+        agentConfig.id,
+        input.projectRepoPath,
+      );
+    } catch (cause) {
+      const code = cause instanceof WorkspaceProvisioningError
+        ? cause.code
+        : "ensure_provisioned_failed";
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const failure: EngineerWiringFailure = {
+        agentId: agentConfig.id,
+        code,
+        cause: message,
+      };
+      throw failure;
+    }
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    const workspacePath = input.provisioner.workspacePathFor(
+      input.projectId,
+      agentConfig.id,
+    );
+    input.schedulerLogger.log("info", "engineer.wired", {
+      agent: agentConfig.id,
+      workspace_path: workspacePath,
+      elapsed_ms: elapsedMs,
+    });
+
+    if (input.makeEngineerRunner !== undefined) {
+      const runner = input.makeEngineerRunner({
+        projectId: input.projectId,
+        projectName: input.projectName,
+        agentConfig,
+        serverUrl: input.serverUrl,
+        projectRepoPath: input.projectRepoPath,
+        provisioner: input.provisioner,
+        logger: input.schedulerLogger,
+      });
+      if (runner !== null) {
+        input.registry.register(runner);
+      }
+    }
+  }
+}
+
+/**
+ * Adapt a {@link SchedulerLogger} to the narrower {@link WorkspaceLogger}
+ * surface the `GitWorkspaceProvisioner` consumes. Both are
+ * (`level`, `event`, `data`)-shaped; the adapter forwards verbatim.
+ */
+function workspaceLoggerOf(logger: SchedulerLogger): WorkspaceLogger {
+  return {
+    log(level, event, data) {
+      logger.log(level, event, data);
+    },
+  };
 }
 
 /**

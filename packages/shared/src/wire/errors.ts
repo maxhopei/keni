@@ -25,6 +25,7 @@ export type ErrorCode =
   | "role_not_owner"
   | "missing_role"
   | "validation_failed"
+  | "merge_conflict"
   | "internal_error";
 
 /** Tuple of every documented {@link ErrorCode}. */
@@ -38,6 +39,7 @@ export const ERROR_CODES: readonly ErrorCode[] = [
   "role_not_owner",
   "missing_role",
   "validation_failed",
+  "merge_conflict",
   "internal_error",
 ] as const;
 

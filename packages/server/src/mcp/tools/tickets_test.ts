@@ -22,6 +22,7 @@ import type {
   ActivityAppendRequest,
   ActivityEntryResponse,
   ActivityFilter,
+  MergePrResponse,
   TicketResponse,
   TicketStatus,
   TicketSummaryResponse,
@@ -93,6 +94,10 @@ function makeFakeHttpClient(canned?: {
       limit: number,
     ): Promise<readonly ActivityEntryResponse[]> {
       calls.push({ method: "queryActivity", args: [filter, limit] });
+      return Promise.reject(new Error("not used here"));
+    },
+    mergePr(prId: string): Promise<MergePrResponse> {
+      calls.push({ method: "mergePr", args: [prId] });
       return Promise.reject(new Error("not used here"));
     },
   };

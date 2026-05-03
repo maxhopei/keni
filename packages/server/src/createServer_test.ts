@@ -21,8 +21,10 @@ import {
   InMemoryTicketStore,
   type TicketListResponse,
 } from "@keni/shared";
+import { FakeWorkspaceProvisioner } from "@keni/role-runtimes";
 import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
 import { captureBusBuffer, createInMemoryEventBus } from "./eventBus.ts";
+import { createMutex } from "./concurrency/mutex.ts";
 import { createServer, type ServerDeps } from "./createServer.ts";
 import { captureLogSink } from "./middleware/requestLog.ts";
 import type { RequestLogLine } from "./middleware/types.ts";
@@ -235,3 +237,50 @@ Deno.test("a successful POST /activity flips the agent runtime status to running
     assertEquals(stateChanged[0]!.payload.status, "running");
   }
 });
+
+Deno.test(
+  "createServer mounts POST /prs/:id/merge only when WorkspaceProvisioner + projectRepoPath are supplied",
+  async () => {
+    const baseDeps = makeDeps();
+    const withoutProvisioner = createServer(baseDeps, { projectId: PROJECT_ID });
+
+    const headers = new Headers();
+    headers.set("X-Keni-Role", "engineer");
+    const res404 = await withoutProvisioner.fetch(
+      new Request("http://x/prs/pr-0001/merge", { method: "POST", headers }),
+    );
+    assertEquals(res404.status, 404);
+    const body404 = (await res404.json()) as ErrorResponse;
+    assertEquals(body404.error.code, "store_not_found");
+    assertEquals(body404.error.details?.path, "/prs/pr-0001/merge");
+  },
+);
+
+Deno.test(
+  "createServer wires the same WorkspaceProvisioner into the merge route's deps bag",
+  async () => {
+    const baseDeps = makeDeps();
+    const provisioner = new FakeWorkspaceProvisioner();
+    const mergeMutex = createMutex();
+    const app = createServer(
+      {
+        ...baseDeps,
+        workspaceProvisioner: provisioner,
+        projectRepoPath: "/tmp/keni-test-repo",
+        mergeMutex,
+      },
+      { projectId: PROJECT_ID },
+    );
+
+    const headers = new Headers();
+    headers.set("X-Keni-Role", "engineer");
+    const res = await app.fetch(
+      new Request("http://x/prs/pr-9999/merge", { method: "POST", headers }),
+    );
+
+    assertEquals(res.status, 404, "missing PR maps to store_not_found, not the no-route 404");
+    const body = (await res.json()) as ErrorResponse;
+    assertEquals(body.error.code, "store_not_found");
+    assertEquals(typeof body.error.details?.id, "string");
+  },
+);

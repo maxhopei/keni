@@ -42,7 +42,11 @@ import type {
   CodingAgentOutcome,
   CyclePrepCtx,
 } from "@keni/role-runtimes";
-import { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "@keni/role-runtimes";
+import {
+  FakeWorkspaceProvisioner,
+  PLACEHOLDER_PROMPT_BODY,
+  PLACEHOLDER_PROMPT_NAME,
+} from "@keni/role-runtimes";
 import { runServer } from "../runServer.ts";
 import type { AgentRunner, AgentRunnerRegistry } from "./registry.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -261,6 +265,11 @@ async function bootRunServer(opts: {
       err: () => {},
       homeDir: opts.home,
       shutdownSignal: ctrl.signal,
+      // The scheduler integration tests do not exercise the workspace
+      // surface; supplying a fake provisioner keeps the project root
+      // free of `git init` plumbing while still letting `wireEngineers`
+      // run.
+      workspaceProvisioner: new FakeWorkspaceProvisioner({ homeDir: opts.home }),
       onSchedulerReady: (handle) => {
         scheduler = handle.scheduler;
         registry = handle.registry;

@@ -24,6 +24,7 @@ import type {
   ActivityEntryResponse,
   ActivityFilter,
   ErrorCode,
+  MergePrResponse,
   TicketResponse,
   TicketStatus,
   TicketSummaryResponse,
@@ -46,6 +47,14 @@ export interface McpHttpClient {
     filter: ActivityFilter,
     limit: number,
   ): Promise<readonly ActivityEntryResponse[]>;
+  /**
+   * `POST /prs/:id/merge` — request a fast-forward merge of an
+   * `approved` PR's branch into `main`. Empty body. Returns the
+   * resulting `merge_commit_sha` from the unwrapped envelope; throws
+   * {@link McpHttpError} (`code: "merge_conflict"`) when git refuses
+   * a fast-forward.
+   */
+  mergePr(prId: string): Promise<MergePrResponse>;
 }
 
 /** Constructor options. */
@@ -185,6 +194,14 @@ export function createMcpHttpClient(opts: McpHttpClientOptions): McpHttpClient {
         headers: headers(),
       });
       return all.slice(0, limit);
+    },
+
+    mergePr: (prId) => {
+      const url = buildUrl(`/prs/${encodeURIComponent(prId)}/merge`);
+      return send<MergePrResponse>(url, {
+        method: "POST",
+        headers: headers(),
+      });
     },
   };
 }

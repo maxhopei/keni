@@ -19,6 +19,7 @@ import type {
   ActivityAppendRequest,
   ActivityEntryResponse,
   ActivityFilter,
+  MergePrResponse,
   TicketResponse,
   TicketStatus,
   TicketSummaryResponse,
@@ -71,6 +72,9 @@ function makeFakeHttpClient(): { client: McpHttpClient; calls: RecordedCall[] } 
     ): Promise<readonly ActivityEntryResponse[]> {
       calls.push({ method: "queryActivity", args: [filter, limit] });
       return Promise.resolve([sampleEntry]);
+    },
+    mergePr(): Promise<MergePrResponse> {
+      return Promise.reject(new Error("not used"));
     },
   };
   return { client, calls };

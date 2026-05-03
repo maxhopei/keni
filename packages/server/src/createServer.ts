@@ -31,6 +31,8 @@ import type {
 import type { AgentRuntimeStateStore } from "./agentState.ts";
 import type { EventBus } from "./eventBus.ts";
 import type { Scheduler } from "./scheduler/scheduler.ts";
+import type { Mutex } from "./concurrency/mutex.ts";
+import { createMutex } from "./concurrency/mutex.ts";
 import { errorBoundary } from "./middleware/errorBoundary.ts";
 import { requestId } from "./middleware/requestId.ts";
 import { requestLog } from "./middleware/requestLog.ts";
@@ -41,6 +43,7 @@ import { agentsRoutes } from "./routes/agents.ts";
 import { eventsRoute } from "./routes/events.ts";
 import { prsRoutes } from "./routes/prs.ts";
 import { ticketsRoutes } from "./routes/tickets.ts";
+import type { WorkspaceProvisioner } from "@keni/role-runtimes";
 
 /**
  * Storage and sink dependencies for the orchestration server. The
@@ -65,6 +68,28 @@ export interface ServerDeps {
    * `runServer`'s lifecycle (`spec.md` §6.1, scheduler capability spec).
    */
   readonly scheduler?: Scheduler;
+  /**
+   * Optional engineer-workspace provisioner. When supplied together with
+   * `projectRepoPath`, `createServer` mounts `POST /prs/:id/merge` and
+   * uses `mergeMutex` to serialise `git merge --ff-only` against the
+   * project repo (engineer-runtime spec § "Engineer prompt sequencing
+   * for merge"; orchestration-server spec § "`POST /prs/:id/merge`…").
+   *
+   * Tests that don't exercise the merge endpoint omit these fields and
+   * the route is not registered.
+   */
+  readonly workspaceProvisioner?: WorkspaceProvisioner;
+  /** Absolute path to the on-disk project git repo used by `merge_pr`. */
+  readonly projectRepoPath?: string;
+  /**
+   * Optional shared mutex for `git merge --ff-only`. When omitted but
+   * `workspaceProvisioner`+`projectRepoPath` are present, `createServer`
+   * builds a fresh in-process mutex. Production wires the same mutex
+   * across `runServer` so engineer parallelism never crosses paths.
+   */
+  readonly mergeMutex?: Mutex;
+  /** Override `git` binary path for merge tests. */
+  readonly gitBinary?: string;
 }
 
 /** Per-process server options (resolved by `runServer` from CLI flags). */
@@ -124,9 +149,19 @@ export function createServer(
     "/tickets",
     ticketsRoutes(deps.ticketStore, deps.eventBus, opts.projectId),
   );
+  const mergeDeps = deps.workspaceProvisioner && deps.projectRepoPath
+    ? {
+      activityLogStore: deps.activityLogStore,
+      workspaceProvisioner: deps.workspaceProvisioner,
+      projectRepoPath: deps.projectRepoPath,
+      mergeMutex: deps.mergeMutex ?? createMutex(),
+      projectId: opts.projectId,
+      gitBinary: deps.gitBinary,
+    }
+    : undefined;
   app.route(
     "/prs",
-    prsRoutes(deps.prStore, deps.eventBus, opts.projectId),
+    prsRoutes(deps.prStore, deps.eventBus, opts.projectId, mergeDeps),
   );
   app.route(
     "/activity",

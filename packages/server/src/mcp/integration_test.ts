@@ -29,6 +29,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { join } from "@std/path";
 import { FileConfigStore, resolveGlobalPaths, resolveProjectPaths } from "@keni/shared";
+import { FakeWorkspaceProvisioner } from "@keni/role-runtimes";
 import { runServer } from "../runServer.ts";
 
 const PROJECT_ID = "00000000-0000-4000-8000-0000000000aa";
@@ -67,6 +68,10 @@ async function startOrchestrationServer(
       err: () => {},
       homeDir: home,
       shutdownSignal: ctrl.signal,
+      // The MCP integration tests do not exercise the engineer
+      // workspace surface; the fake provisioner short-circuits the
+      // git-clone plumbing so the server boots against any temp dir.
+      workspaceProvisioner: new FakeWorkspaceProvisioner({ homeDir: home }),
     },
   );
   const start = performance.now();
@@ -217,6 +222,7 @@ Deno.test({
           "append_activity_entry",
           "get_workspace_path",
           "list_tickets",
+          "merge_pr",
           "query_activity",
           "read_ticket",
           "transition_ticket_status",

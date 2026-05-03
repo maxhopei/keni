@@ -200,6 +200,50 @@ pinned by structural tests:
 Step 09 (engineer specialisation) is the first concrete consumer; step 17 (PO mode selection) will
 plug a four-mode arbiter into the precheck. Both inherit the cycle without modifying it.
 
+### Engineer runtime
+
+The engineer specialisation lives at
+[`packages/role-runtimes/src/engineer/`](./packages/role-runtimes/src/engineer/) and slots into the
+common cycle as a single `AgentRunner` registered against the scheduler. Six invariants frame
+everything else; together they let an engineer agent mutate code without ever seeing the project's
+control plane:
+
+1. **Per-agent sparse-checkout workspace under the engineer's home dir.** Every engineer agent gets
+   its own git clone parked at `<homeDir>/.keni/workspaces/<projectId>/<agentId>/`. The agent never
+   shares working trees with another agent, never shares working trees with the orchestration
+   server's project repo, and never sees the host's real `~/.keni/`. The path is what
+   `get_workspace_path` returns and what `KENI_MCP_WORKSPACE` is set to in the engineer subprocess.
+2. **`.keni/` is sparse-excluded from the workspace.** The workspace's `.git/info/sparse-checkout`
+   file contains exactly two lines (`/*` and `!.keni/`); a post-checkout `Deno.lstat` proves
+   `.keni/` did not materialise. The engineer cannot read tickets, PRs, the activity log, or
+   `project.yaml` directly — the MCP tool surface is the only seam.
+3. **Per-workspace git identity, never the host's `~/.gitconfig`.** Every workspace gets a
+   `git config --local user.name <agentId>` / `user.email <agentId>@keni.invalid` set during
+   provisioning. The host's per-user git config is never read or written. Commits inside the
+   workspace carry the agent's identity; the orchestration server's identity (whatever it is) is
+   irrelevant.
+4. **`pullMain` is the precheck's first step.** Before the engineer runner picks a ticket, it runs
+   `git -C <workspacePath> pull --ff-only origin main`. A non-fast-forward refusal short-circuits
+   the cycle to `precheck_skipped` (no LLM tokens spent, no session row); a missing workspace
+   surfaces `workspace_missing` and the cycle aborts with a clear log line.
+5. **Workspace removal is a boot-time concern, not a per-cycle one.** `runServer` calls
+   `provisioner.ensureProvisioned(...)` for every engineer in the roster on startup; subsequent
+   cycles call `pullMain` only. The cycle never `discardProvisioned`s — that is reserved for the
+   roster-shrink path (an agent removed from `project.yaml`) and for explicit operator action.
+6. **Merge happens via `POST /prs/:id/merge` on the orchestration server, not in the workspace.**
+   The engineer agent calls the `merge_pr` MCP tool, which delegates to the REST endpoint. The
+   server fetches the PR's branch from the engineer's workspace path
+   (`provisioner.workspacePathFor(projectId, author)`) and runs `git merge --ff-only` against `main`
+   in the project repo — serialised by an in-process `Mutex` so two concurrent merges queue instead
+   of racing. The engineer never touches the project repo and never runs `git push origin main`.
+
+The integration suite at
+[`packages/role-runtimes/src/engineer/integration_test.ts`](./packages/role-runtimes/src/engineer/integration_test.ts)
+boots `runServer` in-process against a real git working clone, asserts the workspace shape and
+identity invariants, drives a PR through `open → in_review → approved → merged` over real HTTP, and
+confirms `main` HEAD advances and the activity log gains a `pr_merged` entry. The non-fast-forward
+path is a sibling test asserting the documented `409 merge_conflict` response.
+
 ### Scheduler
 
 `@keni/server`'s in-process scheduler — owned by `runServer` and started immediately after the HTTP
