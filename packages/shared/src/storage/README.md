@@ -51,6 +51,17 @@ replay subscribers consume in addition to (not instead of) the activity log on d
 can ring-buffer events for `?since=<event-id>` replay without touching this module — the wire shape
 carries the uuidv7 `id` precisely so that change is additive.
 
+**`@keni/spa` consumes the wire barrel directly.** Every wire shape the SPA needs (`AgentResponse`,
+`AgentListResponse`, `EventFrame`, `EventName`, the six event payloads, `TicketSummaryResponse`,
+`PRSummaryResponse`, `ActivityEntryResponse`, `ErrorResponse`, `ErrorCode`, `Role`) is re-exported
+from [`@keni/shared/wire/mod.ts`](../wire/mod.ts), and the SPA's `apiClient.ts`, `eventsClient.ts`,
+and components import from `@keni/shared` rather than re-declaring shapes locally. The rule is:
+**every wire type the SPA needs is re-exported from the barrel.** Adding a new endpoint to the
+orchestration server adds the wire type to a `wire/<artifact>.ts` file and re-exports it from
+`wire/mod.ts`; the SPA picks it up automatically and a missing field becomes a build error at the
+SPA's destructure / callsite. See the
+[`spa-shell` capability spec](../../../../openspec/changes/spa-shell-and-agent-roster/specs/spa-shell/spec.md).
+
 Each interface has two implementations:
 
 - **`FileXStore`** — production default. Reads / writes the on-disk layout documented above.

@@ -330,18 +330,55 @@ keni/
 └── packages/
     ├── cli/                  # @keni/cli — the `keni` command, project init and server boot
     ├── server/               # @keni/server — orchestration server (REST + WebSocket APIs), engineer MCP server (stdio), and the in-process role-runtime scheduler (`scheduler/` subdir)
-    ├── spa/                  # @keni/spa — browser dashboard (board, agent roster, chat, spec viewer)
+    ├── spa/                  # @keni/spa — browser dashboard (Vite + React: shell, agent roster, board, drill-downs)
+    │   ├── index.html
+    │   ├── vite.config.ts
+    │   └── src/
+    │       ├── main.tsx              # React entry point + provider wiring
+    │       ├── App.tsx               # routed app (BrowserRouter + Routes)
+    │       ├── index.css             # entry stylesheet (imports tokens + per-component CSS)
+    │       ├── prototypeFlags.ts     # prototype-only UI feature flags
+    │       ├── theme/tokens.css      # CSS custom-property design tokens
+    │       ├── transport/            # apiClient.ts, eventsClient.ts + React contexts
+    │       ├── shell/                # AppShell, TopNav, BoardPlaceholder
+    │       ├── routes/               # RoutePlaceholder, NotFound
+    │       └── features/agentRoster/ # AgentRosterPanel, AgentRosterCard, formatRelativeTime
     ├── role-runtimes/        # @keni/role-runtimes — common cycle wrapper plus per-role specialisations (engineer/QA/PO)
     └── shared/               # @keni/shared — types, storage interfaces, utilities
 ```
 
-### SPA stack (to be wired)
+### Run the SPA
 
-`packages/spa` will be built with **React + Vite via
-[`@deno/vite-plugin`](https://jsr.io/@deno/vite-plugin)**. Step 01 scaffolds the package as a plain
-Deno workspace member; the actual Vite configuration, React root, and `dev`/`build` tasks land in a
-later change (`spa-shell-and-agent-roster` in
-[`initial-implementation-plan/`](./initial-implementation-plan/)).
+`packages/spa` is the browser dashboard — **React 18 + Vite 5 via
+[`@deno/vite-plugin`](https://www.npmjs.com/package/@deno/vite-plugin)**. The app renders a
+three-region shell (top nav, agent roster on the left, board / drill-downs in the centre) and talks
+to the orchestration server over typed REST + a reconnecting WebSocket.
+
+```bash
+cd packages/spa
+deno task dev      # Vite dev server (default URL: http://127.0.0.1:5173)
+deno task build    # production bundle to packages/spa/dist/
+deno task preview  # serve the built bundle locally
+```
+
+The dev server proxies `/api/*` and `/events` (WebSocket) to the orchestration server URL set via
+the `KENI_SERVER_URL` env var (default `http://127.0.0.1:8000`). To wire it against a `--port 0`
+server, take the port the server prints to stdout and run:
+
+```bash
+KENI_SERVER_URL=http://127.0.0.1:<bound-port> deno task dev
+```
+
+Step 13 (`cli-start-and-end-to-end-wiring`) will host the production bundle from the orchestration
+server itself — the dev-server proxy is only required during local SPA development.
+
+The contract for the shell, transport clients, and routing scaffold lives in the
+[`spa-shell` capability spec](./openspec/changes/spa-shell-and-agent-roster/specs/spa-shell/spec.md);
+the agent-roster card and live-update protocol live in the
+[`spa-agent-roster` capability spec](./openspec/changes/spa-shell-and-agent-roster/specs/spa-agent-roster/spec.md).
+Once archived, the canonical references move to
+[`openspec/specs/spa-shell/spec.md`](./openspec/specs/) and
+[`openspec/specs/spa-agent-roster/spec.md`](./openspec/specs/).
 
 ## Conventions
 

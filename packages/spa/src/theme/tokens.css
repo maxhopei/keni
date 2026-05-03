@@ -1,0 +1,61 @@
+/**
+ * Design tokens for `@keni/spa`.
+ *
+ * Colors are picked to comfortably exceed WCAG AA contrast (4.5:1 for body
+ * text) against the matching background in both themes:
+ *
+ *   light theme — text #1a1a1a on bg #ffffff   (~16.1:1)
+ *   dark  theme — text #c9d1d9 on bg #0d1117   (~12.6:1)
+ *
+ * Status / accent colors are chosen for legibility against both surfaces
+ * (the colored dot in `AgentRosterCard` and the connection indicator in
+ * `TopNav` reuse them on either background). When tweaking, re-run the
+ * contrast against both `--keni-color-bg` values before merging.
+ *
+ * No theme switcher today — `prefers-color-scheme` covers the prototype's
+ * needs (`design.md` Decision 7).
+ */
+
+:root {
+  /* Surfaces & text */
+  --keni-color-bg: #ffffff;
+  --keni-color-surface: #f6f8fa;
+  --keni-color-text: #1a1a1a;
+  --keni-color-text-muted: #6a737d;
+  --keni-color-border: #e1e4e8;
+
+  /* Accent + semantic colors */
+  --keni-color-accent: #1f6feb;
+  --keni-color-status-running: #1a7f37;
+  --keni-color-status-idle: #6a737d;
+  --keni-color-disconnected: #cf222e;
+
+  /* Spacing scale */
+  --keni-space-1: 4px;
+  --keni-space-2: 8px;
+  --keni-space-3: 12px;
+  --keni-space-4: 16px;
+  --keni-space-5: 20px;
+  --keni-space-6: 24px;
+
+  /* Typography */
+  --keni-font-body:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --keni-font-mono:
+    "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --keni-color-bg: #0d1117;
+    --keni-color-surface: #161b22;
+    --keni-color-text: #c9d1d9;
+    --keni-color-text-muted: #8b949e;
+    --keni-color-border: #30363d;
+
+    --keni-color-accent: #58a6ff;
+    --keni-color-status-running: #3fb950;
+    --keni-color-status-idle: #8b949e;
+    --keni-color-disconnected: #f85149;
+  }
+}

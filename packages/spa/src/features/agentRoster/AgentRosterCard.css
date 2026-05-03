@@ -1,0 +1,108 @@
+.keni-agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--keni-space-2);
+  padding: var(--keni-space-3);
+  background: var(--keni-color-bg);
+  border: 1px solid var(--keni-color-border);
+  border-radius: 6px;
+}
+
+.keni-agent-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--keni-space-2);
+}
+
+.keni-agent-card__id {
+  font-family: var(--keni-font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--keni-color-text);
+}
+
+.keni-agent-card__role {
+  font-size: 12px;
+  color: var(--keni-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.keni-agent-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--keni-space-1);
+  margin: 0;
+  font-size: 13px;
+}
+
+.keni-agent-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--keni-space-2);
+}
+
+.keni-agent-card__row dt {
+  color: var(--keni-color-text-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.keni-agent-card__row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--keni-space-2);
+  color: var(--keni-color-text);
+}
+
+.keni-agent-card__activity-event {
+  font-family: var(--keni-font-mono);
+  font-size: 12px;
+}
+
+.keni-agent-card__status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--keni-color-status-idle);
+}
+
+.keni-agent-card__status-dot[data-status="running"] {
+  background: var(--keni-color-status-running);
+}
+
+.keni-agent-card__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.keni-agent-card__toggle {
+  padding: var(--keni-space-1) var(--keni-space-3);
+  font-size: 12px;
+  border: 1px solid var(--keni-color-border);
+  border-radius: 4px;
+  background: var(--keni-color-surface);
+  color: var(--keni-color-text);
+  cursor: pointer;
+}
+
+.keni-agent-card__toggle:hover {
+  border-color: var(--keni-color-accent);
+  color: var(--keni-color-accent);
+}
+
+.keni-agent-card__toggle:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.keni-agent-card__error {
+  font-size: 12px;
+  color: var(--keni-color-disconnected);
+  background: rgba(207, 34, 46, 0.08);
+  padding: var(--keni-space-1) var(--keni-space-2);
+  border-radius: 4px;
+}

@@ -1,0 +1,101 @@
+.keni-top-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--keni-space-4);
+  padding: 0 var(--keni-space-4);
+  height: 100%;
+  margin: 0;
+  list-style: none;
+}
+
+.keni-top-nav__brand {
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.5px;
+}
+
+.keni-top-nav__center {
+  display: flex;
+  align-items: center;
+  gap: var(--keni-space-2);
+  margin-left: var(--keni-space-3);
+}
+
+.keni-top-nav__project-label {
+  color: var(--keni-color-text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.keni-top-nav__project-id {
+  font-family: var(--keni-font-mono);
+  font-size: 13px;
+  color: var(--keni-color-text);
+}
+
+.keni-top-nav__links {
+  display: flex;
+  gap: var(--keni-space-3);
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.keni-top-nav__links a {
+  font-size: 14px;
+  color: var(--keni-color-text-muted);
+}
+
+.keni-top-nav__links a:hover {
+  color: var(--keni-color-text);
+}
+
+.keni-top-nav__connection {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--keni-space-2);
+  padding: var(--keni-space-1) var(--keni-space-3);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--keni-color-text-muted);
+}
+
+.keni-top-nav__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--keni-color-text-muted);
+}
+
+.keni-top-nav__connection[data-state="connected"] .keni-top-nav__dot {
+  background: var(--keni-color-status-running);
+}
+
+.keni-top-nav__connection[data-state="connected"] {
+  color: var(--keni-color-status-running);
+}
+
+.keni-top-nav__connection[data-state="connecting"] .keni-top-nav__dot {
+  background: var(--keni-color-text-muted);
+  animation: keni-top-nav-pulse 1.2s ease-in-out infinite;
+}
+
+.keni-top-nav__connection[data-state="disconnected"] .keni-top-nav__dot {
+  background: var(--keni-color-disconnected);
+}
+
+.keni-top-nav__connection[data-state="disconnected"] {
+  color: var(--keni-color-disconnected);
+}
+
+@keyframes keni-top-nav-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

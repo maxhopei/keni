@@ -1,0 +1,45 @@
+@import url("./theme/tokens.css");
+@import url("./shell/AppShell.css");
+@import url("./shell/TopNav.css");
+@import url("./features/agentRoster/AgentRosterPanel.css");
+@import url("./features/agentRoster/AgentRosterCard.css");
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--keni-font-body);
+  color: var(--keni-color-text);
+  background: var(--keni-color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: var(--keni-color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}

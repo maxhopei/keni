@@ -1,0 +1,56 @@
+.keni-roster {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.keni-roster__header {
+  padding: var(--keni-space-3) var(--keni-space-4);
+  border-bottom: 1px solid var(--keni-color-border);
+}
+
+.keni-roster__title {
+  margin: 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--keni-color-text-muted);
+}
+
+.keni-roster__body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: var(--keni-space-3);
+}
+
+.keni-roster__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--keni-space-2);
+}
+
+.keni-roster__loading,
+.keni-roster__empty,
+.keni-roster__error {
+  font-size: 13px;
+  color: var(--keni-color-text-muted);
+  text-align: center;
+  padding: var(--keni-space-4) var(--keni-space-3);
+}
+
+.keni-roster__error p {
+  margin: 0 0 var(--keni-space-2) 0;
+  color: var(--keni-color-disconnected);
+}
+
+.keni-roster__error button {
+  padding: var(--keni-space-1) var(--keni-space-3);
+  border: 1px solid var(--keni-color-border);
+  border-radius: 4px;
+  background: var(--keni-color-surface);
+  color: var(--keni-color-text);
+}
+
+.keni-roster[data-disconnected="true"] .keni-roster__cards {
+  opacity: 0.7;
+}

@@ -1,8 +1,32 @@
 {
   "name": "@keni/spa",
   "version": "0.0.0",
-  "exports": "./src/main.ts",
+  "exports": "./src/main.tsx",
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "deno.ns", "esnext"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  },
+  "imports": {
+    "react": "npm:react@^18",
+    "react-dom": "npm:react-dom@^18",
+    "react-dom/client": "npm:react-dom@^18/client",
+    "react/jsx-runtime": "npm:react@^18/jsx-runtime",
+    "react-router-dom": "npm:react-router-dom@^6",
+    "@types/react": "npm:@types/react@^18",
+    "@types/react-dom": "npm:@types/react-dom@^18",
+    "vite": "npm:vite@^5",
+    "@vitejs/plugin-react": "npm:@vitejs/plugin-react@^4",
+    "@deno/vite-plugin": "npm:@deno/vite-plugin@^1",
+    "@testing-library/react": "npm:@testing-library/react@^16",
+    "@testing-library/jest-dom": "npm:@testing-library/jest-dom@^6",
+    "happy-dom": "npm:happy-dom@^15",
+    "@happy-dom/global-registrator": "npm:@happy-dom/global-registrator@^15"
+  },
   "tasks": {
-    "build": "echo noop"
+    "dev": "deno run -A --node-modules-dir=auto npm:vite",
+    "build": "deno run -A --node-modules-dir=auto npm:vite build",
+    "preview": "deno run -A --node-modules-dir=auto npm:vite preview",
+    "test": "deno test -A"
   }
 }

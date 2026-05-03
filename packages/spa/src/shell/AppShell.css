@@ -1,0 +1,69 @@
+.keni-app-shell {
+  display: grid;
+  height: 100vh;
+  width: 100vw;
+  background: var(--keni-color-bg);
+  color: var(--keni-color-text);
+  grid-template-rows: 56px 1fr;
+}
+
+.keni-app-shell[data-chat-visible="false"] {
+  grid-template-columns: 280px 1fr;
+  grid-template-areas:
+    "nav nav"
+    "roster main";
+}
+
+.keni-app-shell[data-chat-visible="true"] {
+  grid-template-columns: 280px 1fr 360px;
+  grid-template-areas:
+    "nav nav nav"
+    "roster main chat";
+}
+
+.keni-app-shell__nav {
+  grid-area: nav;
+  border-bottom: 1px solid var(--keni-color-border);
+  background: var(--keni-color-surface);
+}
+
+.keni-app-shell__roster {
+  grid-area: roster;
+  border-right: 1px solid var(--keni-color-border);
+  overflow: auto;
+  background: var(--keni-color-surface);
+}
+
+.keni-app-shell__main {
+  grid-area: main;
+  overflow: auto;
+}
+
+.keni-app-shell__chat {
+  grid-area: chat;
+  border-left: 1px solid var(--keni-color-border);
+  overflow: auto;
+  background: var(--keni-color-surface);
+}
+
+@media (max-width: 720px) {
+  .keni-app-shell[data-chat-visible="false"],
+  .keni-app-shell[data-chat-visible="true"] {
+    grid-template-columns: 1fr;
+    grid-template-rows: 56px auto 1fr;
+    grid-template-areas:
+      "nav"
+      "roster"
+      "main";
+  }
+
+  .keni-app-shell__chat {
+    display: none;
+  }
+
+  .keni-app-shell__roster {
+    border-right: none;
+    border-bottom: 1px solid var(--keni-color-border);
+    max-height: 30vh;
+  }
+}
