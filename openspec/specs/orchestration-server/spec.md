@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the contract for `@keni/server` — the local HTTP orchestration server that is the single gatekeeper for every legitimate write to a Keni project's `.keni/` tree (per `spec.md` §5.3) and the structural communication bus between the SPA, role runtimes, MCP layer, and the user. The capability cements `spec.md` §2#1 ("environment as communication bus"), §2#3 ("status drives behaviour"), §4.1 (ticket lifecycle), §4.2 (owning-role rule), §5.1 (project artifacts), §7.1 ("one server, one project"), and §11#5 ("files first, storage abstracted") by requiring a single Hono app that mounts a documented REST surface (`/tickets`, `/prs`, `/activity`, `/agents`) plus a server-push `/events` WebSocket, enforces the status graph and the owning-role rule on every transition, exposes a stable error envelope (`ErrorResponse`) with a closed `ErrorCode` enum, emits structured per-request JSONL log lines, owns a typed in-process `EventBus` and an in-memory `AgentRuntimeStateStore` whose updates fan out to every connected WS client as a documented `EventFrame` discriminated union, separates wire shapes (TS types in `@keni/shared`, zod schemas in `@keni/server`) from storage records, trusts a local-only role-header identity (with a `?role=` query-parameter fallback restricted to `/events`) in the prototype, and ships a development-mode `deno run` entry point that step 13's `keni start` later wraps. The bus and the agent runtime-state store are in-memory only — a server restart resets `paused`, `status`, and `last_*` fields and drops any undelivered events; the activity log remains the durable record and the SPA reconciles via REST on (re)connect. Any change that adds an endpoint, alters the status graph, changes the role-owner table, mutates an error code, edits the middleware order, extends the `EventName` union, or relaxes the trust model lands as a delta spec against this capability.
-
 ## Requirements
-
 ### Requirement: `@keni/server` exposes a Hono-based HTTP orchestration server
 
 The `@keni/server` package SHALL export three composable entry-point functions: `createServer(deps, opts)` SHALL return a `Hono` app instance with every middleware and route mounted, performing no I/O of its own; `startServer(opts)` SHALL bind the Hono app via `Deno.serve`, returning `{ abort, port, url }` for lifecycle control; `runServer(args)` SHALL parse CLI-style argv (`--project <path>`, `--port <number>`, `--host <hostname>`), instantiate the file-backed stores against the resolved project root, call `startServer`, and return an exit code (0 success, 1 runtime error, 2 usage error). `packages/server/src/main.ts` SHALL re-export the three functions and SHALL invoke `Deno.exit(await runServer(Deno.args))` only when run as a script (`import.meta.main`). The server SHALL bind to `127.0.0.1` by default; binding to other hostnames SHALL require explicit `--host`.
@@ -696,18 +694,27 @@ The server SHALL send a WebSocket protocol-level `ping` control frame to every c
 
 ### Requirement: `runServer` instantiates the bus and the agent runtime-state store at bootstrap
 
-`runServer` SHALL call `createInMemoryEventBus()` once after parsing argv and before constructing the server. It SHALL read `projectConfig.agents` (treating an absent field as `[]`) and pass that list to `createInMemoryAgentRuntimeStateStore(roster)`, where each entry is seeded with `paused: false`, `status: "idle"`, `last_activity: null`, `last_active_at: null` and the role read from the project-config row. Both instances SHALL be passed to `createServer` via the extended `ServerDeps`. Direct `deno run -A packages/server/src/main.ts --project=<path>` invocations SHALL produce a working `/agents` endpoint and `/events` upgrade without any additional flags.
+`runServer` SHALL call `createInMemoryEventBus()` once after parsing argv and before constructing the server. It SHALL read `projectConfig.agents` (treating an absent field as `[]`) and pass that list to `createInMemoryAgentRuntimeStateStore(roster)`, where each entry is seeded with `paused: false`, `status: "idle"`, `last_activity: null`, `last_active_at: null` and the role read from the project-config row. `runServer` SHALL also call `createScheduler(deps, opts)` exactly once after the bus and runtime-state store exist, passing `projectConfig.agents`, `projectConfig.schedules`, and `projectConfig.timeouts` (each defaulted to its empty value when absent), and the bound server URL (resolved via the `startServer` return value) for the scheduler's activity-log adapter. `runServer` SHALL call `scheduler.start()` exactly once after the HTTP server is bound and accepting connections, and SHALL call `scheduler.stop()` from the abort handler before resolving the server's exit code (so an in-flight cycle's `AbortSignal` fires before the HTTP server's draining `Deno.serve` shuts down). The bus, runtime-state store, and scheduler SHALL all be passed to `createServer` via the extended `ServerDeps`. Direct `deno run -A packages/server/src/main.ts --project=<path>` invocations SHALL produce a working `/agents` endpoint and `/events` upgrade *and* a running scheduler without any additional flags. When `projectConfig.agents` is empty, the scheduler SHALL still be started (a no-op tick loop), so adding the first agent later is purely additive.
 
 #### Scenario: Boot against a project with a roster
 
 - **WHEN** `runServer(["--project=<tempDir>", "--port=0"])` is invoked against a project whose `project.yaml` declares `agents: [{ id: "alice", role: "engineer" }]`
 - **THEN** the bound server's `GET /agents` returns the seeded `alice` row
 - **AND** the bound server's `/events` accepts a WS upgrade
+- **AND** the scheduler has been started exactly once with alice in its agent list
 
 #### Scenario: Boot against a project with no roster
 
 - **WHEN** `runServer(["--project=<tempDir>", "--port=0"])` is invoked against a project whose `project.yaml` has no `agents` field
 - **THEN** the bound server's `GET /agents` returns `{ data: [], project_id: <uuid> }`
+- **AND** the scheduler has been started with an empty agent list (no per-agent timers armed)
+
+#### Scenario: Shutdown calls `scheduler.stop()` before resolving
+
+- **WHEN** the test fires the server's abort signal during a normal shutdown
+- **THEN** `scheduler.stop()` is invoked exactly once
+- **AND** the function returns 0 only after `scheduler.stop()` has resolved
+- **AND** the HTTP server's draining `Deno.serve` does not begin its drain until `scheduler.stop()` has resolved (ensuring in-flight cycles' final `POST /activity` calls reach a still-running server)
 
 ### Requirement: Wire shapes for `agents` and `events` follow the same TS-types-in-`@keni/shared` / zod-schemas-in-`@keni/server` split as the existing endpoints
 
@@ -790,3 +797,4 @@ The existing requirements covering the ticket / PR / activity / error-envelope /
 - **WHEN** an upgrade request without a role is dispatched
 - **THEN** the request log captures one line with `path: "/events"`, `status: 400`, `error_code: "missing_role"`
 - **AND** the line carries the `request_id` echoed on the response
+
