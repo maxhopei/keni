@@ -164,10 +164,39 @@ deno run -A packages/server/src/mcp/main.ts \
 All three flags are required. `--agent` must match `/^[a-z0-9_-]+$/` (the orchestration server
 identifies the caller via the closure-captured agent id, not via tool input — defense-in-depth
 against an agent claiming to be someone else inside a tool call). `--workspace` must be an existing
-directory; the value is what `get_workspace_path` returns. Step 07 (`role-runtime-and-workspace`)
-wires this invocation into the engineer subprocess's `mcpServers` config block — until then,
-developers attach a manual MCP client (e.g. the SDK's `mcp-cli` debugger or a coding-agent CLI's MCP
-debug mode) to exercise the surface.
+directory; the value is what `get_workspace_path` returns. Step 07 (`role-runtime-common`) wires
+this invocation into the engineer subprocess's `mcpServers` config block — until then, developers
+attach a manual MCP client (e.g. the SDK's `mcp-cli` debugger or a coding-agent CLI's MCP debug
+mode) to exercise the surface.
+
+### Role runtimes (common)
+
+`@keni/role-runtimes` exposes a deterministic seven-step cycle wrapper — `startCycle(params)` — that
+any role (engineer, QA, PO) plugs into by supplying a precheck function, a bundled prompt, an
+MCP-server config, and a `CodingAgentInvoker`. The cycle implements [`spec.md`](./spec.md) §6.2
+step-for-step: precheck → log `session_start` → resolve the bundled prompt → build the invocation →
+spawn and stream stdout/stderr per line → idle-detect → log `session_end` (or `idle`). The runtime
+returns a typed `RoleCycleResult` discriminated union covering five outcomes (`completed`, `idle`,
+`precheck_skipped`, `terminated`, `spawn_failed`) so callers — typically step 08's scheduler — can
+`switch` over a closed shape.
+
+The common cycle code lives in
+[`packages/role-runtimes/src/common/`](./packages/role-runtimes/src/common/). Four invariants are
+pinned by structural tests:
+
+1. **Single cycle per invocation.** No looping, no scheduling, no retry — that is the scheduler's
+   job. Each call generates a fresh uuidv7 `session_id` and runs to completion exactly once.
+2. **Stateless across invocations.** No module-scope state survives between cycles; concurrent
+   invocations against different agent ids are safe by construction.
+3. **Activity log only via `POST /activity`.** No source file under
+   `packages/role-runtimes/src/common/` reads or writes any path under `.keni/` or `~/.keni/`. The
+   typed activity-log adapter at `activityClient.ts` stamps `X-Keni-Role` and `X-Keni-Agent` on
+   every request.
+4. **Role-agnostic.** No `role === "engineer"` branches; every role-shaped concern (precheck,
+   prompt, env allowlist, MCP config) is a parameter on `RoleCycleParams`.
+
+Step 09 (engineer specialisation) is the first concrete consumer; step 17 (PO mode selection) will
+plug a four-mode arbiter into the precheck. Both inherit the cycle without modifying it.
 
 ## Repository layout
 
@@ -188,7 +217,7 @@ keni/
     ├── cli/                  # @keni/cli — the `keni` command, project init and server boot
     ├── server/               # @keni/server — orchestration server (REST + WebSocket APIs) and engineer MCP server (stdio)
     ├── spa/                  # @keni/spa — browser dashboard (board, agent roster, chat, spec viewer)
-    ├── role-runtimes/        # @keni/role-runtimes — thin subprocess wrappers per role (PO, engineer, QA, writer)
+    ├── role-runtimes/        # @keni/role-runtimes — common cycle wrapper plus per-role specialisations (engineer/QA/PO)
     └── shared/               # @keni/shared — types, storage interfaces, utilities
 ```
 
