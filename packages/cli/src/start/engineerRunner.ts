@@ -112,6 +112,7 @@ export function buildProductionEngineerRunnerFactory(
       promptInjection: entry.promptInjection,
       resumeFlag: entry.resumeFlag,
       envAllowlist: entry.envAllowlist,
+      mcpConfigStrategy: entry.mcpConfigStrategy,
     });
 
     const workspacePath = input.provisioner.workspacePathFor(

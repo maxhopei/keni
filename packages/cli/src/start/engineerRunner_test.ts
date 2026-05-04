@@ -217,10 +217,11 @@ Deno.test(
     const log: CapturedLogEntry[] = [];
     const fixtureEntry: CodingAgentCliEntry = {
       cliBinary: "fake",
-      buildArgs: () => ["--mcp-config"],
+      buildArgs: () => [],
       promptInjection: "stdin",
       resumeFlag: "--resume",
       envAllowlist: ["HOME", "PATH"],
+      mcpConfigStrategy: { kind: "tempfile-json" },
     };
     const extended: Readonly<Record<string, CodingAgentCliEntry>> = {
       ...codingAgentCliRegistry,

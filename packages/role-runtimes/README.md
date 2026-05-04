@@ -17,6 +17,12 @@ packages/role-runtimes/src/
 ├── common/                       # role-agnostic seven-step cycle + types
 │   ├── startCycle.ts             # the cycle wrapper (single invocation, stateless)
 │   ├── activityClient.ts         # typed POST /activity adapter (X-Keni-{Role,Agent} stamped)
+│   ├── codingAgentCliRegistry.ts # closed registry: KnownCli, CodingAgentCliEntry, McpConfigStrategy
+│   ├── codingAgentClis/          # one file per CLI; each exports a single CodingAgentCliEntry
+│   │   ├── claude.ts             # claudeEntry (tempfile-json strategy)
+│   │   ├── cursorAgent.ts        # cursorAgentEntry (workspace-json under .cursor/mcp.json)
+│   │   └── codex.ts              # codexEntry (workspace-toml under .codex/config.toml)
+│   ├── codingAgentInvoker.ts     # createSubprocessCodingAgentInvoker + strategy executor
 │   ├── types.ts                  # AgentRunner, BundledPrompt, McpServerConfig, RoleCycleResult, …
 │   └── integration_test.ts       # end-to-end fake-coding-agent driving startCycle
 ├── engineer/                     # engineer specialisation
@@ -31,6 +37,23 @@ packages/role-runtimes/src/
 │   └── integration_test.ts       # in-process runServer + workspace shape + POST /prs/:id/merge
 └── main.ts                       # barrel re-exports
 ```
+
+### Adding a new coding-agent CLI to the registry
+
+1. Add `packages/role-runtimes/src/common/codingAgentClis/<newCli>.ts` exporting the
+   `CodingAgentCliEntry` constant. The entry's `mcpConfigStrategy` field is the seam that decides
+   where the keni MCP-server config is materialised:
+   - `{ kind: "tempfile-json" }` for CLIs that accept a `--mcp-config <path>` argv flag.
+   - `{ kind: "workspace-json", relativePath, mergeKey, entryName }` for CLIs that discover MCP
+     servers from a workspace-scoped JSON file (e.g. `.cursor/mcp.json`).
+   - `{ kind: "workspace-toml", relativePath, tableHeader, entryName }` for CLIs that consume a TOML
+     config file (e.g. `.codex/config.toml`).
+2. Bind the entry under its `KnownCli` key in `codingAgentCliRegistry.ts` and extend the `KnownCli`
+   literal union and `isKnownCli` guard.
+3. Add a registry-shape scenario in `codingAgentCliRegistry_test.ts` pinning the new entry's argv
+   invariants and strategy fields.
+4. (Optional) Add an integration test against the real binary under
+   `packages/role-runtimes/tests/integration/<newCli>_test.ts`, gated on the binary being on `PATH`.
 
 ## The engineer subdirectory
 

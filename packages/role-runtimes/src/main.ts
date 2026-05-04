@@ -42,7 +42,11 @@ export { createSubprocessCodingAgentInvoker } from "./common/codingAgentInvoker.
 export type { SubprocessCodingAgentInvokerOpts } from "./common/codingAgentInvoker.ts";
 
 export { codingAgentCliRegistry, isKnownCli } from "./common/codingAgentCliRegistry.ts";
-export type { CodingAgentCliEntry, KnownCli } from "./common/codingAgentCliRegistry.ts";
+export type {
+  CodingAgentCliEntry,
+  KnownCli,
+  McpConfigStrategy,
+} from "./common/codingAgentCliRegistry.ts";
 
 export { resolveBundledPrompt } from "./common/promptResolver.ts";
 

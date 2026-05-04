@@ -183,7 +183,9 @@ export type RoleCycleResult =
 export type RoleRuntimeErrorCode =
   | "empty_prompt_body"
   | "prompt_name_mismatch"
-  | "invalid_resume_session_id";
+  | "invalid_resume_session_id"
+  | "workspace_required_for_strategy"
+  | "mcp_config_corrupt";
 
 /**
  * Typed error class for cycle-internal validation failures. Distinct from

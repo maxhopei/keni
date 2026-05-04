@@ -131,6 +131,7 @@ function buildParams(
       cliBinary: Deno.execPath(),
       buildArgs: () => ["run", "-A", FIXTURE_PATH],
       promptInjection: "stdin",
+      mcpConfigStrategy: { kind: "tempfile-json" },
       graceMs: 1000,
       envAllowlist: [
         "KENI_FAKE_AGENT_LINES",
@@ -274,8 +275,8 @@ async function listProductionSourceFiles(): Promise<string[]> {
       out.push(join(COMMON_DIR, entry.name));
     }
   }
-  // Walk subdirectories `prompts/` and `fakes/` as well.
-  for (const sub of ["prompts", "fakes"]) {
+  // Walk subdirectories `prompts/`, `fakes/`, and `codingAgentClis/` as well.
+  for (const sub of ["prompts", "fakes", "codingAgentClis"]) {
     const dir = join(COMMON_DIR, sub);
     try {
       for await (const entry of Deno.readDir(dir)) {
@@ -303,32 +304,48 @@ function stripComments(source: string): string {
 
 Deno.test("structural — packages/role-runtimes/src/common/ has no `.keni/` reads or writes", async () => {
   const files = await listProductionSourceFiles();
+  // The default subprocess invoker's strategy executor (per the
+  // role-runtime spec's `mcpConfigStrategy` requirement) is the one
+  // sanctioned production file that may read / write workspace-rooted
+  // MCP-config files (`.cursor/mcp.json`, `.codex/config.toml`). Every
+  // other file under `common/` retains the no-disk-prompt-loading
+  // contract.
+  const SANCTIONED_IO_FILES = new Set(["codingAgentInvoker.ts"]);
   for (const file of files) {
     const stripped = stripComments(await Deno.readTextFile(file));
+    const basename = file.split("/").pop() ?? file;
+    const ioSanctioned = SANCTIONED_IO_FILES.has(basename);
+
     // Read primitives are forbidden in production source — prompts ship as
-    // TS constants, never read from disk.
-    for (const forbidden of ["Deno.readTextFile", "Deno.readFile"]) {
-      if (stripped.includes(forbidden)) {
-        throw new Error(`${file}: contains forbidden read primitive \`${forbidden}\``);
+    // TS constants, never read from disk. Sanctioned files may use them
+    // for MCP-config materialisation.
+    if (!ioSanctioned) {
+      for (const forbidden of ["Deno.readTextFile", "Deno.readFile"]) {
+        if (stripped.includes(forbidden)) {
+          throw new Error(`${file}: contains forbidden read primitive \`${forbidden}\``);
+        }
       }
     }
-    // No path literal under `.keni/` or `~/.keni/` may appear anywhere.
+    // No path literal under `.keni/` or `~/.keni/` may appear anywhere
+    // (sanctioned files included — the strategy executor's workspace
+    // paths are computed via `joinPath`, never as literals).
     for (const pathToken of ['".keni/', "'.keni/", '"~/.keni/', "'~/.keni/"]) {
       if (stripped.includes(pathToken)) {
         throw new Error(`${file}: contains forbidden path literal \`${pathToken}\``);
       }
     }
-    // Writes are permitted only against `Deno.makeTempFile`-derived paths
-    // (the default invoker's mcp-config tempfile). Any `Deno.writeTextFile`
-    // / `Deno.writeFile` must appear in a file that also calls
-    // `Deno.makeTempFile`; otherwise it's an unauthorised write.
-    if (
-      (stripped.includes("Deno.writeTextFile") || stripped.includes("Deno.writeFile")) &&
-      !stripped.includes("Deno.makeTempFile")
-    ) {
-      throw new Error(
-        `${file}: uses a write primitive without a paired Deno.makeTempFile (the only sanctioned write target)`,
-      );
+    // Writes in non-sanctioned files are permitted only against
+    // `Deno.makeTempFile`-derived paths (the default invoker's
+    // mcp-config tempfile in the `tempfile-json` strategy).
+    if (!ioSanctioned) {
+      if (
+        (stripped.includes("Deno.writeTextFile") || stripped.includes("Deno.writeFile")) &&
+        !stripped.includes("Deno.makeTempFile")
+      ) {
+        throw new Error(
+          `${file}: uses a write primitive without a paired Deno.makeTempFile (the only sanctioned write target)`,
+        );
+      }
     }
   }
 });

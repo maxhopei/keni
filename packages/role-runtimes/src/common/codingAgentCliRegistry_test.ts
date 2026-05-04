@@ -1,17 +1,19 @@
 /**
- * Pin the closed `KnownCli` set, the per-entry shape, and the
- * documented argv invariants for the `claude` entry. These tests are
- * the contract surface for `engineer-runner-production-wiring` —
- * they ensure adding a new CLI is a deliberate code change with
- * scenarios, not a config-file edit.
+ * Pin the closed `KnownCli` set, the per-entry shape, the per-CLI argv
+ * invariants, and the modular file layout (one entry per module under
+ * `codingAgentClis/`). These tests are the contract surface for
+ * `coding-agent-cli-mcp-strategies` — they ensure adding a new CLI is
+ * a deliberate code change with scenarios, not a config-file edit.
  */
 
 import { assert, assertEquals, assertStrictEquals } from "@std/assert";
+import { fromFileUrl } from "@std/path";
 import {
   type CodingAgentCliEntry,
   codingAgentCliRegistry,
   isKnownCli,
   type KnownCli,
+  type McpConfigStrategy,
 } from "./codingAgentCliRegistry.ts";
 import {
   createSubprocessCodingAgentInvoker,
@@ -25,7 +27,9 @@ const FAKE_MCP_CONFIG: McpServerConfig = {
   args: ["run", "-A", "/abs/mcp/main.ts"],
 };
 
-function fakeInvocation(): CodingAgentInvocation {
+function fakeInvocation(
+  override: Partial<CodingAgentInvocation> = {},
+): CodingAgentInvocation {
   return {
     promptBody: "hello",
     role: "engineer",
@@ -35,6 +39,7 @@ function fakeInvocation(): CodingAgentInvocation {
     mcpServerConfig: FAKE_MCP_CONFIG,
     resumeSessionId: null,
     envAllowlist: ["HOME", "PATH"],
+    ...override,
   };
 }
 
@@ -44,7 +49,7 @@ Deno.test("codingAgentCliRegistry: Object.keys matches the closed KnownCli set",
 });
 
 Deno.test(
-  "codingAgentCliRegistry: every entry has the documented shape (cliBinary, buildArgs, promptInjection, resumeFlag, envAllowlist)",
+  "codingAgentCliRegistry: every entry has the documented shape (cliBinary, buildArgs, promptInjection, resumeFlag, envAllowlist, mcpConfigStrategy)",
   () => {
     for (const [name, entry] of Object.entries(codingAgentCliRegistry)) {
       assert(
@@ -66,6 +71,22 @@ Deno.test(
       assert(
         Array.isArray(entry.envAllowlist),
         `${name}.envAllowlist must be a readonly string[]`,
+      );
+      assert(
+        typeof entry.mcpConfigStrategy === "object" &&
+          entry.mcpConfigStrategy !== null,
+        `${name}.mcpConfigStrategy must be a non-null object`,
+      );
+      const validKinds: McpConfigStrategy["kind"][] = [
+        "tempfile-json",
+        "workspace-json",
+        "workspace-toml",
+      ];
+      assert(
+        validKinds.includes(entry.mcpConfigStrategy.kind),
+        `${name}.mcpConfigStrategy.kind must be one of ${
+          validKinds.join(", ")
+        } (got '${entry.mcpConfigStrategy.kind}')`,
       );
     }
   },
@@ -95,12 +116,10 @@ Deno.test(
 );
 
 Deno.test(
-  "codingAgentCliRegistry['claude'].buildArgs includes the mcpConfigPath exactly once and a non-interactive flag, and excludes --interactive",
+  "codingAgentCliRegistry['claude'].buildArgs uses --mcp-config and --print, and its strategy is tempfile-json",
   () => {
-    const argv = codingAgentCliRegistry["claude"].buildArgs(
-      fakeInvocation(),
-      "/tmp/mcp-1234.json",
-    );
+    const entry = codingAgentCliRegistry["claude"];
+    const argv = entry.buildArgs(fakeInvocation(), "/tmp/mcp-1234.json");
 
     const occurrences = argv.filter((a) => a === "/tmp/mcp-1234.json").length;
     assertEquals(
@@ -117,6 +136,72 @@ Deno.test(
       !argv.includes("--interactive"),
       `argv must not contain '--interactive'; got argv=${JSON.stringify(argv)}`,
     );
+    assertEquals(entry.mcpConfigStrategy.kind, "tempfile-json");
+  },
+);
+
+Deno.test(
+  "codingAgentCliRegistry['cursor-agent'].buildArgs uses --print --approve-mcps --workspace, and its strategy is workspace-json under .cursor/mcp.json",
+  () => {
+    const entry = codingAgentCliRegistry["cursor-agent"];
+    const argv = entry.buildArgs(
+      fakeInvocation({ workspacePath: "/tmp/ws" }),
+      "<ignored>",
+    );
+
+    assert(argv.includes("--print"), `argv=${JSON.stringify(argv)}`);
+    assert(argv.includes("--approve-mcps"), `argv=${JSON.stringify(argv)}`);
+    const wsIdx = argv.indexOf("--workspace");
+    assert(wsIdx >= 0, `argv missing --workspace: ${JSON.stringify(argv)}`);
+    assertEquals(argv[wsIdx + 1], "/tmp/ws");
+    assert(
+      !argv.includes("--mcp-config"),
+      `argv must NOT contain --mcp-config: ${JSON.stringify(argv)}`,
+    );
+
+    const strategy = entry.mcpConfigStrategy;
+    assertEquals(strategy.kind, "workspace-json");
+    if (strategy.kind === "workspace-json") {
+      assertEquals(strategy.relativePath, ".cursor/mcp.json");
+      assertEquals(strategy.mergeKey, "mcpServers");
+      assertEquals(strategy.entryName, "keni");
+    }
+  },
+);
+
+Deno.test(
+  "codingAgentCliRegistry['cursor-agent'].buildArgs omits --workspace when invocation.workspacePath is null",
+  () => {
+    const entry = codingAgentCliRegistry["cursor-agent"];
+    const argv = entry.buildArgs(
+      fakeInvocation({ workspacePath: null }),
+      "<ignored>",
+    );
+    assert(!argv.includes("--workspace"), `argv=${JSON.stringify(argv)}`);
+    assert(argv.includes("--print"));
+    assert(argv.includes("--approve-mcps"));
+  },
+);
+
+Deno.test(
+  "codingAgentCliRegistry['codex'].buildArgs uses 'exec' (no --mcp-config), and its strategy is workspace-toml under .codex/config.toml",
+  () => {
+    const entry = codingAgentCliRegistry["codex"];
+    const argv = entry.buildArgs(fakeInvocation(), "<ignored>");
+
+    assertEquals(argv[0], "exec", `argv=${JSON.stringify(argv)}`);
+    assert(
+      !argv.includes("--mcp-config"),
+      `argv must NOT contain --mcp-config: ${JSON.stringify(argv)}`,
+    );
+
+    const strategy = entry.mcpConfigStrategy;
+    assertEquals(strategy.kind, "workspace-toml");
+    if (strategy.kind === "workspace-toml") {
+      assertEquals(strategy.relativePath, ".codex/config.toml");
+      assertEquals(strategy.tableHeader, "mcp_servers");
+      assertEquals(strategy.entryName, "keni");
+    }
   },
 );
 
@@ -172,3 +257,124 @@ Deno.test("KnownCli union has exactly the three documented members at the type l
   assertEquals(exhaust("cursor-agent"), "cursor-agent");
   assertEquals(exhaust("codex"), "codex");
 });
+
+Deno.test(
+  "McpConfigStrategy union has exactly the three documented members at the type level",
+  () => {
+    const exhaust = (s: McpConfigStrategy): string => {
+      switch (s.kind) {
+        case "tempfile-json":
+          return "tempfile-json";
+        case "workspace-json":
+          return s.relativePath;
+        case "workspace-toml":
+          return s.relativePath;
+        default: {
+          const _never: never = s;
+          return _never;
+        }
+      }
+    };
+    assertEquals(exhaust({ kind: "tempfile-json" }), "tempfile-json");
+    assertEquals(
+      exhaust({
+        kind: "workspace-json",
+        relativePath: "p",
+        mergeKey: "k",
+        entryName: "n",
+      }),
+      "p",
+    );
+    assertEquals(
+      exhaust({
+        kind: "workspace-toml",
+        relativePath: "p",
+        tableHeader: "h",
+        entryName: "n",
+      }),
+      "p",
+    );
+  },
+);
+
+const CODING_AGENT_CLIS_DIR = fromFileUrl(
+  new URL("./codingAgentClis", import.meta.url),
+);
+
+Deno.test(
+  "registry assembly file does not contain inline per-CLI literal data",
+  async () => {
+    const registryPath = fromFileUrl(
+      new URL("./codingAgentCliRegistry.ts", import.meta.url),
+    );
+    const text = await Deno.readTextFile(registryPath);
+    // The registry assembly file must not redeclare the per-CLI literal
+    // data — every entry's content lives in its own module.
+    assert(
+      !text.includes(`cliBinary: "claude"`),
+      "registry file must not contain inline 'claude' cliBinary",
+    );
+    assert(
+      !text.includes(`cliBinary: "cursor-agent"`),
+      "registry file must not contain inline 'cursor-agent' cliBinary",
+    );
+    assert(
+      !text.includes(`cliBinary: "codex"`),
+      "registry file must not contain inline 'codex' cliBinary",
+    );
+    // It must import each per-CLI module by name.
+    assert(text.includes('from "./codingAgentClis/claude.ts"'));
+    assert(text.includes('from "./codingAgentClis/cursorAgent.ts"'));
+    assert(text.includes('from "./codingAgentClis/codex.ts"'));
+  },
+);
+
+Deno.test(
+  "per-CLI modules under codingAgentClis/ do not import each other",
+  async () => {
+    const siblingNames = new Set<string>();
+    for await (const entry of Deno.readDir(CODING_AGENT_CLIS_DIR)) {
+      if (entry.isFile && entry.name.endsWith(".ts") && !entry.name.endsWith("_test.ts")) {
+        siblingNames.add(entry.name);
+      }
+    }
+    assert(siblingNames.size >= 3, `expected ≥3 per-CLI modules, got ${siblingNames.size}`);
+
+    for (const file of siblingNames) {
+      const path = `${CODING_AGENT_CLIS_DIR}/${file}`;
+      const text = await Deno.readTextFile(path);
+      for (const sibling of siblingNames) {
+        if (sibling === file) continue;
+        const stem = sibling.replace(/\.ts$/, "");
+        assert(
+          !text.includes(`./codingAgentClis/${stem}`) &&
+            !text.includes(`./${stem}.ts`) &&
+            !text.includes(`./${stem}"`),
+          `${file} must not import sibling ${sibling}`,
+        );
+      }
+    }
+  },
+);
+
+Deno.test(
+  "every per-CLI module exports exactly one CodingAgentCliEntry constant",
+  async () => {
+    const expectedExports = new Map([
+      ["claude.ts", "claudeEntry"],
+      ["cursorAgent.ts", "cursorAgentEntry"],
+      ["codex.ts", "codexEntry"],
+    ]);
+    for (const [file, exportName] of expectedExports.entries()) {
+      const mod = await import(`./codingAgentClis/${file}`);
+      const entry = (mod as Record<string, unknown>)[exportName];
+      assert(
+        entry !== undefined,
+        `${file} must export ${exportName}`,
+      );
+      const e = entry as CodingAgentCliEntry;
+      assert(typeof e.cliBinary === "string");
+      assert(typeof e.buildArgs === "function");
+    }
+  },
+);

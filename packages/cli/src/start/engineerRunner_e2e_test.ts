@@ -207,6 +207,7 @@ itGit(
       promptInjection: "stdin",
       resumeFlag: "--resume",
       envAllowlist: ["HOME", "PATH"],
+      mcpConfigStrategy: { kind: "tempfile-json" },
     };
 
     const out: string[] = [];

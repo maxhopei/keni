@@ -257,13 +257,27 @@ agents:
 ```
 
 The closed list of supported CLI names lives in
-[`packages/role-runtimes/src/common/codingAgentCliRegistry.ts`](./packages/role-runtimes/src/common/codingAgentCliRegistry.ts):
+[`packages/role-runtimes/src/common/codingAgentCliRegistry.ts`](./packages/role-runtimes/src/common/codingAgentCliRegistry.ts);
+each entry's argv and MCP-config strategy ships in a single-purpose module under
+[`packages/role-runtimes/src/common/codingAgentClis/`](./packages/role-runtimes/src/common/codingAgentClis/).
 
-| Name           | Coverage    | Notes                                                                                              |
-| -------------- | ----------- | -------------------------------------------------------------------------------------------------- |
-| `claude`       | tested      | Anthropic's Claude Code CLI. Argv shape unit-tested against the documented `--print --mcp-config`. |
-| `cursor-agent` | best-effort | Cursor's headless agent CLI. Modelled against the documented contract; no integration test yet.    |
-| `codex`        | best-effort | OpenAI's Codex CLI. Modelled against the documented `exec` subcommand; no integration test yet.    |
+| Name           | Coverage    | Argv shape                                              | MCP config lands at                                                  |
+| -------------- | ----------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
+| `claude`       | tested      | `claude --print --mcp-config <tempfile>` (stdin prompt) | `${TMPDIR}/keni-mcp-*.json` (removed on cycle exit)                  |
+| `cursor-agent` | tested\*    | `cursor-agent --print --approve-mcps --workspace <ws>`  | `<workspace>/.cursor/mcp.json` (merged under `mcpServers.keni`)      |
+| `codex`        | best-effort | `codex exec` (stdin prompt)                             | `<workspace>/.codex/config.toml` (merged under `[mcp_servers.keni]`) |
+
+\* The `cursor-agent` entry is covered by an integration test that spawns the real binary; the test
+is gated on `cursor-agent` being on `PATH` and is skipped via `Deno.test.ignore` on machines without
+the binary.
+
+For the workspace-scoped strategies (`cursor-agent` and `codex`), the keni MCP-server entry is
+_merged_ into the workspace's existing config file — a user who has committed their own MCP servers
+in the project repo's `.cursor/mcp.json` (or `.codex/config.toml`) keeps them. The merged file
+persists in the per-agent workspace (`~/.keni/workspaces/<projectId>/<agentId>/`) across cycles and
+is re-merged idempotently each tick. `claude`'s MCP config lives in `${TMPDIR}` and is removed on
+cycle exit. The default subprocess invoker also sets the spawned CLI's working directory to the
+per-agent workspace, so file-discovery-based CLIs find their workspace-rooted config files.
 
 When the resolved CLI is missing or unknown, `keni start` emits a single `warn`-level
 `engineer.runner_skipped` line per agent at boot — for example:

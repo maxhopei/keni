@@ -12,6 +12,17 @@
  *     single `engineer.runner_skipped` warn line per agent at boot,
  *     per the `cli-start` capability spec).
  *
+ * The per-CLI entry constants live in single-purpose modules under
+ * `./codingAgentClis/` (one file per CLI). This file is the assembly
+ * point only — it imports each per-CLI module and binds it to its
+ * `KnownCli` key. Adding a fourth CLI is a four-step contract:
+ *
+ *   1. Create `./codingAgentClis/<newCli>.ts` exporting the entry.
+ *   2. Import it in this file and bind it under its name.
+ *   3. Extend `KnownCli` and `isKnownCli`.
+ *   4. Add a registry-shape test scenario in
+ *      `codingAgentCliRegistry_test.ts`.
+ *
  * Each entry's shape is a strict subset of {@link import("./codingAgentInvoker.ts").SubprocessCodingAgentInvokerOpts}
  * — a caller may spread an entry into `createSubprocessCodingAgentInvoker(opts)`
  * directly without translation.
@@ -22,24 +33,61 @@
  * `KENI_MCP_WORKSPACE` entries are added on top by `buildChildEnv`
  * (see `subprocess.ts`); they SHALL NOT be duplicated here.
  *
- * Coverage tags:
+ * Coverage tags (documented per-entry in JSDoc):
  *
  *   - `"tested"`   — the entry's `buildArgs` is exercised by a unit
- *                    test in `codingAgentCliRegistry_test.ts`.
+ *                    test in `codingAgentCliRegistry_test.ts`, an
+ *                    integration test against the real binary, or both.
  *   - `"best-effort"` — the entry's argv shape is modelled against the
  *                    CLI's documented contract but is not yet covered
  *                    by an integration test that spawns the real
- *                    binary. The follow-up tasks 6.1 / 6.2 in the
- *                    `engineer-runner-production-wiring` change track
- *                    closing this gap.
+ *                    binary.
  *
  * @module
  */
 
 import type { CodingAgentInvocation } from "./types.ts";
+import { claudeEntry } from "./codingAgentClis/claude.ts";
+import { cursorAgentEntry } from "./codingAgentClis/cursorAgent.ts";
+import { codexEntry } from "./codingAgentClis/codex.ts";
 
 /** The closed set of coding-agent CLIs the production wiring supports. */
 export type KnownCli = "claude" | "cursor-agent" | "codex";
+
+/**
+ * How the role-runtime cycle materialises the keni MCP-server config
+ * for the CLI. Each `kind` maps to a per-strategy executor branch in
+ * `codingAgentInvoker.ts`. The strategy is a value type — every field
+ * is a string literal or a discriminator. Adding a fourth strategy is
+ * a deliberate type-level change that requires updating the union, the
+ * executor, and at least one structural test scenario.
+ *
+ *   - `tempfile-json` — write `{ mcpServers: { keni: <config> } }` to
+ *     `Deno.makeTempFile(...)` and remove on cycle exit. The CLI
+ *     accepts the path via argv (e.g. `claude --mcp-config <path>`).
+ *   - `workspace-json` — merge the keni entry into
+ *     `<workspacePath>/<relativePath>` under `<mergeKey>.<entryName>`.
+ *     The CLI reads the file via filesystem discovery; no argv path is
+ *     needed (cursor-agent ignores the path argument). No cleanup is
+ *     registered — the per-agent workspace is keni-managed and the
+ *     merge is idempotent across cycles.
+ *   - `workspace-toml` — TOML equivalent for codex's
+ *     `[mcp_servers.<name>]` table-header layout.
+ */
+export type McpConfigStrategy =
+  | { readonly kind: "tempfile-json" }
+  | {
+    readonly kind: "workspace-json";
+    readonly relativePath: string;
+    readonly mergeKey: string;
+    readonly entryName: string;
+  }
+  | {
+    readonly kind: "workspace-toml";
+    readonly relativePath: string;
+    readonly tableHeader: string;
+    readonly entryName: string;
+  };
 
 /** A registry entry — a strict subset of `SubprocessCodingAgentInvokerOpts`. */
 export interface CodingAgentCliEntry {
@@ -47,9 +95,10 @@ export interface CodingAgentCliEntry {
   readonly cliBinary: string;
   /**
    * Builds the CLI argv for one invocation. The `mcpConfigPath` is the
-   * path to the JSON file the role-runtime cycle's invoker writes
-   * containing `{ mcpServers: { keni: invocation.mcpServerConfig } }`.
-   * The role-runtime cycle's invoker prepends `[resumeFlag,
+   * path produced by the entry's {@link McpConfigStrategy} executor;
+   * some entries (e.g. `cursor-agent`) ignore the argument because the
+   * CLI discovers the file from the workspace filesystem. The role-
+   * runtime cycle's invoker prepends `[resumeFlag,
    * invocation.resumeSessionId]` to this argv when
    * `invocation.resumeSessionId !== null`; entries SHOULD NOT include
    * the resume flag in the returned argv.
@@ -67,6 +116,11 @@ export interface CodingAgentCliEntry {
    * on top of this list by `buildChildEnv`.
    */
   readonly envAllowlist: readonly string[];
+  /**
+   * Where the keni MCP-server config is materialised before spawn.
+   * See {@link McpConfigStrategy}.
+   */
+  readonly mcpConfigStrategy: McpConfigStrategy;
 }
 
 /**
@@ -79,85 +133,14 @@ export function isKnownCli(value: string): value is KnownCli {
 }
 
 /**
- * `claude` — Anthropic's Claude Code CLI.
- *
- * Reference: <https://docs.anthropic.com/en/docs/claude-code/cli-usage>
- *
- * Coverage: `tested` (unit tests in `codingAgentCliRegistry_test.ts`
- * pin the argv shape; the e2e test in
- * `packages/cli/src/start/engineerRunner_e2e_test.ts` swaps in a fake
- * fixture binary via the `RunStartDeps.codingAgentCliRegistryOverride`
- * seam — it does not spawn the real `claude` binary).
- *
- * Argv shape: `claude --print --mcp-config <path>` with the prompt body
- * fed via stdin. `--print` is Claude Code's documented non-interactive
- * flag; `--mcp-config <path>` loads the MCP server JSON. The role-
- * runtime cycle's invoker prepends `[--resume, <session-id>]` when
- * resuming.
- */
-const claudeEntry: CodingAgentCliEntry = {
-  cliBinary: "claude",
-  buildArgs: (_invocation, mcpConfigPath) => [
-    "--print",
-    "--mcp-config",
-    mcpConfigPath,
-  ],
-  promptInjection: "stdin",
-  resumeFlag: "--resume",
-  envAllowlist: ["HOME", "PATH", "ANTHROPIC_API_KEY"],
-};
-
-/**
- * `cursor-agent` — Cursor's headless agent CLI.
- *
- * Reference: <https://docs.cursor.com/en/cli/overview>
- *
- * Coverage: `best-effort`. The argv shape is modelled against the CLI's
- * documented `--print` (non-interactive) and `--mcp-config <path>`
- * flags as of the v0 prototype. The follow-up task
- * `engineer-runner-production-wiring/tasks.md#6.1` tracks adding an
- * integration test that spawns the real binary; until that lands,
- * mismatches surface as `roleRuntime.spawn_failed` activity entries
- * per cycle (the user's first-run feedback).
- */
-const cursorAgentEntry: CodingAgentCliEntry = {
-  cliBinary: "cursor-agent",
-  buildArgs: (_invocation, mcpConfigPath) => [
-    "--print",
-    "--mcp-config",
-    mcpConfigPath,
-  ],
-  promptInjection: "stdin",
-  resumeFlag: "--resume",
-  envAllowlist: ["HOME", "PATH", "CURSOR_API_KEY"],
-};
-
-/**
- * `codex` — OpenAI's Codex CLI.
- *
- * Reference: <https://github.com/openai/codex>
- *
- * Coverage: `best-effort`. The argv shape is modelled against the
- * CLI's documented `exec` non-interactive subcommand and its
- * `--mcp-config <path>` flag. The follow-up task
- * `engineer-runner-production-wiring/tasks.md#6.2` tracks adding an
- * integration test that spawns the real binary.
- */
-const codexEntry: CodingAgentCliEntry = {
-  cliBinary: "codex",
-  buildArgs: (_invocation, mcpConfigPath) => [
-    "exec",
-    "--mcp-config",
-    mcpConfigPath,
-  ],
-  promptInjection: "stdin",
-  resumeFlag: "--resume",
-  envAllowlist: ["HOME", "PATH", "OPENAI_API_KEY"],
-};
-
-/**
  * The closed registry. Referentially stable — importers MAY use entry
  * identity for caching / equality.
+ *
+ * Per-CLI entry constants are imported from sibling modules under
+ * `./codingAgentClis/`. This file SHALL NOT contain inline entry
+ * literals (no `cliBinary` strings, no argv shapes, no env-allowlist
+ * values for specific CLIs); the structural test in
+ * `codingAgentCliRegistry_test.ts` enforces this.
  */
 export const codingAgentCliRegistry: Readonly<
   Record<KnownCli, CodingAgentCliEntry>
