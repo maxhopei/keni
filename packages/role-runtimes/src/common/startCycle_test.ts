@@ -150,7 +150,7 @@ Deno.test("startCycle — terminated: appendSessionEnd carries refs.terminated_b
   // hands `terminatedBy` to the typed method, so refs at this layer is `{}`.
 });
 
-Deno.test("startCycle — spawn_failed: invoker throws synchronously, final session_end with refs.spawn_failed", async () => {
+Deno.test("startCycle — spawn_failed: invoker throws synchronously, final session_end with refs.spawn_failed and refs.error", async () => {
   const fakeInvoker = createFakeCodingAgentInvoker();
   fakeInvoker.throwOnInvoke(new Error("binary not found: claude"));
   const fakeClient = createFakeActivityLogClient();
@@ -164,8 +164,15 @@ Deno.test("startCycle — spawn_failed: invoker throws synchronously, final sess
   assertEquals(calls[0]!.method, "appendSessionStart");
   const sessionEnd = calls.find((c) => c.method === "appendSessionEnd");
   assert(sessionEnd !== undefined);
-  const refs = (sessionEnd!.args as Record<string, unknown>).refs as Record<string, string>;
+  const seArgs = sessionEnd!.args as Record<string, unknown>;
+  const refs = seArgs.refs as Record<string, string>;
   assertEquals(refs.spawn_failed, "true");
+  // The cycle MUST surface the failure cause in the activity-log entry
+  // itself so an operator can diagnose without grepping the scheduler
+  // stderr; both the human-readable summary and the structured `error`
+  // ref carry the message.
+  assertEquals(refs.error, "Error: binary not found: claude");
+  assertEquals(seArgs.summary, "binary not found: claude");
 });
 
 Deno.test("startCycle — resume id plumbed: refs.resume_session_id present, invocation field set, sessions distinct", async () => {

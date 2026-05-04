@@ -143,12 +143,9 @@ export async function startCycle(
   try {
     prompt = resolveBundledPrompt(params.promptResolver(prepCtx), params.expectedPromptName);
   } catch (err) {
-    await tryAppendFinalFailure(activity, sessionId);
-    return {
-      outcome: "spawn_failed",
-      sessionId,
-      error: err instanceof Error ? err : new Error(String(err)),
-    };
+    const wrapped = err instanceof Error ? err : new Error(String(err));
+    await tryAppendFinalFailure(activity, sessionId, wrapped);
+    return { outcome: "spawn_failed", sessionId, error: wrapped };
   }
 
   const invocation: CodingAgentInvocation = {
@@ -227,12 +224,9 @@ export async function startCycle(
   try {
     outcome = await params.codingAgentInvoker.invoke(invocation, lifecycle);
   } catch (err) {
-    await tryAppendFinalFailure(activity, sessionId);
-    return {
-      outcome: "spawn_failed",
-      sessionId,
-      error: err instanceof Error ? err : new Error(String(err)),
-    };
+    const wrapped = err instanceof Error ? err : new Error(String(err));
+    await tryAppendFinalFailure(activity, sessionId, wrapped);
+    return { outcome: "spawn_failed", sessionId, error: wrapped };
   }
   const cycleEndTime = performance.now();
   const wallTimeMs = cycleEndTime - cycleStartTime;
@@ -261,7 +255,7 @@ export async function startCycle(
   }
 
   if (activityErrors.length > 0) {
-    await tryAppendFinalFailure(activity, sessionId);
+    await tryAppendFinalFailure(activity, sessionId, activityErrors[0]!);
     return {
       outcome: "spawn_failed",
       sessionId,
@@ -326,16 +320,29 @@ export async function startCycle(
 async function tryAppendFinalFailure(
   activity: ActivityLogClient,
   sessionId: string,
+  error?: Error,
 ): Promise<void> {
+  const refs: Record<string, string> = { spawn_failed: "true" };
+  if (error !== undefined) {
+    // Surface the failure cause in the activity log itself so an
+    // operator can diagnose without grepping the scheduler stderr.
+    // Truncate hard at 2 KiB so a chatty `Error.stack` cannot blow up
+    // the activity entry's storage row.
+    refs.error = truncate(`${error.name}: ${error.message}`, 2048);
+  }
   try {
     await activity.appendSessionEnd({
       sessionId,
       exitCode: -1,
-      summary: null,
-      refs: { spawn_failed: "true" },
+      summary: error !== undefined ? truncate(error.message, 240) : null,
+      refs,
     });
   } catch {
     // Best-effort: the orchestration server may be unreachable; the
     // caller still gets a coherent RoleCycleResult.
   }
+}
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }

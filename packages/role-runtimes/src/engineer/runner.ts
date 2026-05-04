@@ -66,6 +66,16 @@ export interface EngineerRunnerOpts {
   readonly agentId: AgentId;
   readonly projectRepoPath: string;
   readonly serverUrl: string;
+  /**
+   * The engineer's per-agent workspace path
+   * (`<homeDir>/.keni/workspaces/<projectId>/<agentId>`). The runner
+   * propagates this to `RoleCycleParams.workspacePath` so the role-runtime
+   * cycle can spawn the coding-agent CLI in the correct cwd and so
+   * workspace-rooted MCP-config strategies (`workspace-json`,
+   * `workspace-toml`) can materialise `<workspace>/.cursor/mcp.json` /
+   * `<workspace>/.codex/config.toml` against this path.
+   */
+  readonly workspacePath: string;
   readonly mcpServerConfig: McpServerConfig;
   readonly envAllowlist?: readonly string[];
   readonly idleThresholdMs?: number;
@@ -86,6 +96,14 @@ export interface EngineerAgentRunner {
   readonly expectedPromptName: string;
   readonly codingAgentInvoker: CodingAgentInvoker;
   readonly mcpServerConfig: McpServerConfig;
+  /**
+   * The per-agent workspace path the role-runtime cycle SHALL set as
+   * `RoleCycleParams.workspacePath`. The scheduler reads this off the
+   * registered runner and prefers it over the project-level
+   * `SchedulerOpts.workspacePath` so each engineer agent's cycle spawns
+   * with its own workspace cwd.
+   */
+  readonly workspacePath: string;
   readonly envAllowlist?: readonly string[];
   readonly idleThresholdMs?: number;
   readonly terminationGraceMs?: number;
@@ -191,6 +209,7 @@ export function createEngineerRunner(
     expectedPromptName: ENGINEER_PROMPT_NAME,
     codingAgentInvoker: deps.codingAgentInvoker,
     mcpServerConfig: opts.mcpServerConfig,
+    workspacePath: opts.workspacePath,
     ...(opts.envAllowlist !== undefined ? { envAllowlist: opts.envAllowlist } : {}),
     ...(opts.idleThresholdMs !== undefined ? { idleThresholdMs: opts.idleThresholdMs } : {}),
     ...(opts.terminationGraceMs !== undefined

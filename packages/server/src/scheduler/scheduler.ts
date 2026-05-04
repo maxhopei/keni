@@ -165,14 +165,17 @@ export function createScheduler(
     runner: AgentRunner,
     signal: AbortSignal,
   ): RoleCycleParams {
+    // Per-agent `runner.workspacePath` (from the engineer runner's
+    // production wiring) wins over the project-level
+    // `opts.workspacePath`; the latter is a legacy one-value-fits-all
+    // option that does not model per-agent workspaces correctly.
+    const resolvedWorkspacePath = runner.workspacePath ?? opts.workspacePath ?? null;
     return {
       role: entry.role,
       agentId: entry.agentId as AgentId,
       serverUrl: opts.serverUrl,
       projectName: opts.projectName,
-      ...(opts.workspacePath !== undefined && opts.workspacePath !== null
-        ? { workspacePath: opts.workspacePath }
-        : {}),
+      ...(resolvedWorkspacePath !== null ? { workspacePath: resolvedWorkspacePath } : {}),
       mcpServerConfig: runner.mcpServerConfig,
       precheck: runner.precheck,
       promptResolver: runner.promptResolver,
@@ -288,6 +291,16 @@ export function createScheduler(
         logger.log("debug", "tick.precheck_skipped", {
           agent: entry.agentId,
           reason: result.reason,
+        });
+      } else if (result.outcome === "spawn_failed") {
+        // The cycle itself caught the error and returned a structured
+        // result; the scheduler still logs at warn level so an operator
+        // grepping the keni-server log sees the failure cause without
+        // having to round-trip through the activity log.
+        logger.log("warn", "cycle.spawn_failed", {
+          agent: entry.agentId,
+          role: entry.role,
+          error: result.error.message,
         });
       }
     } finally {

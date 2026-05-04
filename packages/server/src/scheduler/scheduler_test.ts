@@ -539,6 +539,128 @@ Deno.test("scheduler — proceed precheck invokes startCycle with registered run
   }
 });
 
+// (g.1) Per-runner workspacePath wins over project-level opts.workspacePath
+// — a regression test for the bug where the engineer runner had a workspace
+// path on hand (used to build mcpServerConfig) but never propagated it to
+// `RoleCycleParams.workspacePath`. The workspace-rooted MCP-config strategies
+// then threw `workspace_required_for_strategy` and the cycle exited with
+// `spawn_failed: true, exit_code: -1` and no other diagnostic.
+Deno.test(
+  "scheduler — runner.workspacePath is forwarded to RoleCycleParams.workspacePath",
+  async () => {
+    const h = makeHarness();
+    try {
+      const runtime = createInMemoryAgentRuntimeStateStore([
+        { id: "alice", role: "engineer" },
+      ]);
+      const registry = createAgentRunnerRegistry(captureSchedulerLogger(h.logBuffer));
+      registry.register(
+        fakeRunner("engineer", {
+          precheck: () => ({ kind: "proceed" }),
+          workspacePath: "/tmp/ws/alice",
+        }),
+      );
+
+      const startCycleCalls: RoleCycleParams[] = [];
+      const fakeStartCycle: typeof import("@keni/role-runtimes").startCycle = (
+        params,
+      ): Promise<RoleCycleResult> => {
+        startCycleCalls.push(params);
+        return Promise.resolve({
+          outcome: "completed",
+          sessionId: "s-fake",
+          exitCode: 0,
+          summary: "ok",
+        });
+      };
+
+      const scheduler = createScheduler(
+        {
+          runtimeStore: runtime,
+          logger: captureSchedulerLogger(h.logBuffer),
+          registry,
+          clock: h.clock.clock,
+          startCycle: fakeStartCycle,
+        },
+        {
+          agents: [{ id: "alice", role: "engineer" }],
+          schedules: { alice: "100ms" },
+          serverUrl: h.stub.url,
+          projectName: "test",
+          // The legacy project-level workspacePath is still accepted but
+          // MUST lose to the per-runner value when both are set.
+          workspacePath: "/tmp/ws/PROJECT",
+        },
+      );
+      scheduler.start();
+      await h.clock.tick(100);
+      assertEquals(startCycleCalls.length, 1);
+      assertEquals(startCycleCalls[0]?.workspacePath, "/tmp/ws/alice");
+      await scheduler.stop();
+    } finally {
+      await h.stop();
+    }
+  },
+);
+
+// (g.2) When the runner does not set workspacePath, the legacy project-level
+// `opts.workspacePath` is still honoured (back-compat with the cron-scheduler
+// design that predates per-agent workspaces).
+Deno.test(
+  "scheduler — falls back to opts.workspacePath when runner.workspacePath is unset",
+  async () => {
+    const h = makeHarness();
+    try {
+      const runtime = createInMemoryAgentRuntimeStateStore([
+        { id: "alice", role: "engineer" },
+      ]);
+      const registry = createAgentRunnerRegistry(captureSchedulerLogger(h.logBuffer));
+      registry.register(
+        fakeRunner("engineer", {
+          precheck: () => ({ kind: "proceed" }),
+        }),
+      );
+
+      const startCycleCalls: RoleCycleParams[] = [];
+      const fakeStartCycle: typeof import("@keni/role-runtimes").startCycle = (
+        params,
+      ): Promise<RoleCycleResult> => {
+        startCycleCalls.push(params);
+        return Promise.resolve({
+          outcome: "completed",
+          sessionId: "s-fake",
+          exitCode: 0,
+          summary: "ok",
+        });
+      };
+
+      const scheduler = createScheduler(
+        {
+          runtimeStore: runtime,
+          logger: captureSchedulerLogger(h.logBuffer),
+          registry,
+          clock: h.clock.clock,
+          startCycle: fakeStartCycle,
+        },
+        {
+          agents: [{ id: "alice", role: "engineer" }],
+          schedules: { alice: "100ms" },
+          serverUrl: h.stub.url,
+          projectName: "test",
+          workspacePath: "/tmp/ws/PROJECT",
+        },
+      );
+      scheduler.start();
+      await h.clock.tick(100);
+      assertEquals(startCycleCalls.length, 1);
+      assertEquals(startCycleCalls[0]?.workspacePath, "/tmp/ws/PROJECT");
+      await scheduler.stop();
+    } finally {
+      await h.stop();
+    }
+  },
+);
+
 // (h) Coalesce on second tick when active != null.
 Deno.test("scheduler — second tick coalesces while first cycle is in flight", async () => {
   const h = makeHarness();

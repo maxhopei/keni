@@ -111,6 +111,7 @@ function defaultOpts() {
       agentId: ALICE,
       projectRepoPath: "/tmp/repo",
       serverUrl: "http://127.0.0.1:5174",
+      workspacePath: provisioner.workspacePathFor("p1", "alice"),
       mcpServerConfig: buildEngineerMcpServerConfig({
         agentId: ALICE,
         serverUrl: "http://127.0.0.1:5174",
@@ -214,6 +215,7 @@ Deno.test("precheck: pullMain failure short-circuits to skip with no HTTP traffi
     agentId: ALICE,
     projectRepoPath: "/tmp/repo",
     serverUrl: "http://127.0.0.1:5174",
+    workspacePath: provisioner.workspacePathFor("p1", "alice"),
     mcpServerConfig: buildEngineerMcpServerConfig({
       agentId: ALICE,
       serverUrl: "http://127.0.0.1:5174",
@@ -343,6 +345,24 @@ Deno.test("optional opts are propagated through the runner bag", () => {
   assertEquals(runner.terminationGraceMs, 7000);
   assertEquals(runner.envAllowlist, ["HOME", "PATH"]);
 });
+
+Deno.test(
+  "createEngineerRunner propagates workspacePath onto the returned runner bag — the scheduler reads it back to build RoleCycleParams.workspacePath, which is in turn what the workspace-rooted MCP-config strategies require",
+  () => {
+    const { provisioner, opts } = defaultOpts();
+    const { logger } = captureLogger();
+    const runner = createEngineerRunner(
+      {
+        provisioner,
+        codingAgentInvoker: noopInvoker,
+        activityHttpClient: fakeHttp(),
+        logger,
+      },
+      opts,
+    );
+    assertEquals(runner.workspacePath, provisioner.workspacePathFor("p1", "alice"));
+  },
+);
 
 Deno.test("noopOutcome type-only ensures CodingAgentOutcome is importable", () => {
   // Compile-time only — exercises the `CodingAgentOutcome` import to keep

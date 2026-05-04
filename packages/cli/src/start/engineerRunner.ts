@@ -144,6 +144,7 @@ export function buildProductionEngineerRunnerFactory(
         agentId: input.agentConfig.id as AgentId,
         projectRepoPath: input.projectRepoPath,
         serverUrl: input.serverUrl,
+        workspacePath,
         mcpServerConfig,
         envAllowlist: entry.envAllowlist,
       },

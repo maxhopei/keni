@@ -77,9 +77,19 @@ Deno.test(
       logger: captureLogger(log),
     });
 
-    const runner = factory(makeInput({ id: "alice", role: "engineer" }));
+    const input = makeInput({ id: "alice", role: "engineer" });
+    const runner = factory(input);
     assert(runner !== null, "expected a registered engineer runner");
     assertEquals(runner.role, "engineer");
+    // The production helper MUST forward the per-agent workspace path
+    // onto the runner bag — the scheduler reads this off the runner to
+    // build `RoleCycleParams.workspacePath`, which the workspace-rooted
+    // MCP-config strategies (`workspace-json` / `workspace-toml`) require
+    // to materialise their config files.
+    assertEquals(
+      runner.workspacePath,
+      input.provisioner.workspacePathFor(input.projectId, input.agentConfig.id),
+    );
     assertEquals(
       log.length,
       0,

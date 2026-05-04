@@ -41,6 +41,15 @@ export interface AgentRunner {
   readonly codingAgentInvoker: CodingAgentInvoker;
   readonly envAllowlist?: readonly string[];
   readonly mcpServerConfig: McpServerConfig;
+  /**
+   * Per-agent workspace path the scheduler SHALL forward as
+   * `RoleCycleParams.workspacePath`. When set, this wins over the
+   * project-level `SchedulerOpts.workspacePath` (a one-value-fits-all
+   * leftover that does not model per-agent workspaces correctly). The
+   * production engineer wiring populates this from
+   * `provisioner.workspacePathFor(projectId, agentId)`.
+   */
+  readonly workspacePath?: string;
   /** Optional override of the cycle's idle threshold (default 250 ms). */
   readonly idleThresholdMs?: number;
   /** Optional override of the cycle's SIGTERM grace period (default 5 000 ms). */
