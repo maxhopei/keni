@@ -1,0 +1,73 @@
+.keni-board-card {
+  display: block;
+  padding: var(--keni-board-card-padding, var(--keni-space-3));
+  background: var(--keni-color-bg);
+  border: 1px solid var(--keni-color-border);
+  border-radius: 6px;
+  color: var(--keni-color-text);
+  font-size: 13px;
+  line-height: 1.35;
+  text-decoration: none;
+  cursor: grab;
+}
+
+.keni-board-card:hover {
+  border-color: var(--keni-color-accent);
+  text-decoration: none;
+}
+
+.keni-board-card:active {
+  cursor: grabbing;
+}
+
+.keni-board-card__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--keni-space-2);
+  margin-bottom: var(--keni-space-1);
+}
+
+.keni-board-card__id {
+  font-family: var(--keni-font-mono);
+  font-size: 11px;
+  color: var(--keni-color-text-muted);
+}
+
+.keni-board-card__priority {
+  display: inline-block;
+  min-width: 24px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--keni-color-surface);
+  border: 1px solid var(--keni-color-border);
+  color: var(--keni-color-text-muted);
+  font-family: var(--keni-font-mono);
+  font-size: 11px;
+  text-align: center;
+}
+
+.keni-board-card__title {
+  font-weight: 500;
+  margin-bottom: var(--keni-space-1);
+  word-break: break-word;
+}
+
+.keni-board-card__assignee {
+  font-size: 12px;
+  color: var(--keni-color-text-muted);
+}
+
+.keni-board-card__error {
+  margin-top: var(--keni-space-2);
+  padding: var(--keni-space-1) var(--keni-space-2);
+  border-radius: 4px;
+  background: var(--keni-color-disconnected);
+  color: #ffffff;
+  font-family: var(--keni-font-mono);
+  font-size: 11px;
+}
+
+.keni-board-card[data-error] {
+  border-color: var(--keni-color-disconnected);
+}

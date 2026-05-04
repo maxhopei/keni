@@ -13,15 +13,25 @@
  */
 
 import type {
+  ActivityAppendRequest,
   ActivityEntryResponse,
+  ActivityEnvelope,
   ActivityQueryResponse,
   AgentEnvelope,
   AgentListResponse,
   ErrorCode,
   ErrorResponse,
+  MergePrEnvelope,
+  PREnvelope,
+  PRIntentPatchRequest,
   PRListResponse,
+  PRTransitionRequest,
   Role,
+  TicketCreateRequest,
+  TicketEnvelope,
+  TicketHeaderPatchRequest,
   TicketListResponse,
+  TicketTransitionRequest,
 } from "@keni/shared";
 
 /**
@@ -46,10 +56,13 @@ export interface ListTicketsFilter {
 
 export interface ListPrsFilter {
   readonly status?: readonly string[];
+  /** Narrow to PRs whose parent ticket id equals the given value. */
+  readonly ticket?: string;
 }
 
 export interface ListActivityFilter {
   readonly agent?: string;
+  readonly role?: Role;
   readonly from?: string;
   readonly to?: string;
 }
@@ -61,8 +74,17 @@ export interface ApiClient {
   pauseAgent(id: string): Promise<AgentEnvelope>;
   resumeAgent(id: string): Promise<AgentEnvelope>;
   listTickets(filter?: ListTicketsFilter): Promise<TicketListResponse>;
+  getTicket(id: string): Promise<TicketEnvelope>;
+  createTicket(input: TicketCreateRequest): Promise<TicketEnvelope>;
+  patchTicket(id: string, patch: TicketHeaderPatchRequest): Promise<TicketEnvelope>;
+  transitionTicket(id: string, req: TicketTransitionRequest): Promise<TicketEnvelope>;
   listPrs(filter?: ListPrsFilter): Promise<PRListResponse>;
+  getPr(id: string): Promise<PREnvelope>;
+  patchPrIntent(id: string, req: PRIntentPatchRequest): Promise<PREnvelope>;
+  transitionPr(id: string, req: PRTransitionRequest): Promise<PREnvelope>;
+  mergePr(id: string): Promise<MergePrEnvelope>;
   listActivity(filter?: ListActivityFilter): Promise<ActivityQueryResponse>;
+  appendActivity(input: ActivityAppendRequest): Promise<ActivityEnvelope>;
 }
 
 export interface CreateApiClientOpts {
@@ -179,18 +201,83 @@ export function createApiClient(opts: CreateApiClientOpts = {}): ApiClient {
       return await request<TicketListResponse>("GET", `/api/tickets${query}`);
     },
 
+    async getTicket(id: string): Promise<TicketEnvelope> {
+      return await request<TicketEnvelope>("GET", `/api/tickets/${encodeURIComponent(id)}`);
+    },
+
+    async createTicket(input: TicketCreateRequest): Promise<TicketEnvelope> {
+      return await request<TicketEnvelope>("POST", "/api/tickets", input);
+    },
+
+    async patchTicket(
+      id: string,
+      patch: TicketHeaderPatchRequest,
+    ): Promise<TicketEnvelope> {
+      return await request<TicketEnvelope>(
+        "PATCH",
+        `/api/tickets/${encodeURIComponent(id)}`,
+        patch,
+      );
+    },
+
+    async transitionTicket(
+      id: string,
+      req: TicketTransitionRequest,
+    ): Promise<TicketEnvelope> {
+      return await request<TicketEnvelope>(
+        "POST",
+        `/api/tickets/${encodeURIComponent(id)}/transition`,
+        req,
+      );
+    },
+
     async listPrs(filter?: ListPrsFilter): Promise<PRListResponse> {
-      const query = buildQuery({ status: filter?.status?.join(",") });
+      const query = buildQuery({
+        status: filter?.status?.join(","),
+        ticket: filter?.ticket,
+      });
       return await request<PRListResponse>("GET", `/api/prs${query}`);
+    },
+
+    async getPr(id: string): Promise<PREnvelope> {
+      return await request<PREnvelope>("GET", `/api/prs/${encodeURIComponent(id)}`);
+    },
+
+    async patchPrIntent(id: string, req: PRIntentPatchRequest): Promise<PREnvelope> {
+      return await request<PREnvelope>(
+        "PATCH",
+        `/api/prs/${encodeURIComponent(id)}/intent`,
+        req,
+      );
+    },
+
+    async transitionPr(id: string, req: PRTransitionRequest): Promise<PREnvelope> {
+      return await request<PREnvelope>(
+        "POST",
+        `/api/prs/${encodeURIComponent(id)}/transition`,
+        req,
+      );
+    },
+
+    async mergePr(id: string): Promise<MergePrEnvelope> {
+      return await request<MergePrEnvelope>(
+        "POST",
+        `/api/prs/${encodeURIComponent(id)}/merge`,
+      );
     },
 
     async listActivity(filter?: ListActivityFilter): Promise<ActivityQueryResponse> {
       const query = buildQuery({
         agent: filter?.agent,
+        role: filter?.role,
         from: filter?.from,
         to: filter?.to,
       });
       return await request<ActivityQueryResponse>("GET", `/api/activity${query}`);
+    },
+
+    async appendActivity(input: ActivityAppendRequest): Promise<ActivityEnvelope> {
+      return await request<ActivityEnvelope>("POST", "/api/activity", input);
     },
   };
 }

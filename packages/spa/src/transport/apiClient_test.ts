@@ -6,7 +6,18 @@
 
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createApiClient, KeniApiError } from "./apiClient.ts";
-import type { AgentListResponse, AgentResponse, ErrorResponse } from "@keni/shared";
+import type {
+  ActivityEntryResponse,
+  ActivityEnvelope,
+  AgentListResponse,
+  AgentResponse,
+  ErrorResponse,
+  MergePrEnvelope,
+  PREnvelope,
+  PRResponse,
+  TicketEnvelope,
+  TicketResponse,
+} from "@keni/shared";
 
 interface MockBackend {
   readonly baseUrl: string;
@@ -225,6 +236,365 @@ Deno.test("listTickets omits the query string when no filter is provided", async
     const client = createApiClient({ baseUrl: backend.baseUrl });
     await client.listTickets();
     assertEquals(firstRequest(backend).url.search, "");
+  } finally {
+    await backend.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Tickets: getTicket / createTicket / patchTicket / transitionTicket
+// ---------------------------------------------------------------------------
+
+const TICKET_0001: TicketResponse = {
+  id: "ticket-0001",
+  title: "Add login page",
+  status: "open",
+  assignee: null,
+  priority: 100,
+  change_request: null,
+  created_at: "2026-05-04T07:00:00.000Z",
+  updated_at: "2026-05-04T07:00:00.000Z",
+  body: "Users should be able to log in",
+};
+
+Deno.test("getTicket returns the typed envelope", async () => {
+  const envelope: TicketEnvelope = { data: TICKET_0001, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "GET /api/tickets/ticket-0001": () => jsonResponse(envelope),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.getTicket("ticket-0001");
+    assertEquals(result.data.id, "ticket-0001");
+    assertEquals(result.data.title, "Add login page");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("getTicket surfaces 404 as KeniApiError(store_not_found)", async () => {
+  const errorBody: ErrorResponse = {
+    error: { code: "store_not_found", message: "ticket-9999 not found" },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "GET /api/tickets/ticket-9999": () => jsonResponse(errorBody, 404),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const error = await assertRejects(
+      () => client.getTicket("ticket-9999"),
+      KeniApiError,
+    );
+    assertEquals(error.status, 404);
+    assertEquals(error.code, "store_not_found");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("createTicket sends the typed body and returns the envelope", async () => {
+  const envelope: TicketEnvelope = { data: TICKET_0001, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/tickets": async (request) => {
+        const body = await request.json();
+        assertEquals(body.title, "Add login page");
+        assertEquals(body.priority, 100);
+        return jsonResponse(envelope, 201);
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.createTicket({ title: "Add login page", priority: 100 });
+    assertEquals(result.data.id, "ticket-0001");
+    assertEquals(firstRequest(backend).method, "POST");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("patchTicket surfaces validation_failed with field-level details", async () => {
+  const errorBody: ErrorResponse = {
+    error: { code: "validation_failed", message: "unknown field status" },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "PATCH /api/tickets/ticket-0001": () => jsonResponse(errorBody, 400),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const error = await assertRejects(
+      // deno-lint-ignore no-explicit-any
+      () => client.patchTicket("ticket-0001", { status: "in_progress" } as any),
+      KeniApiError,
+    );
+    assertEquals(error.status, 400);
+    assertEquals(error.code, "validation_failed");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("transitionTicket sends {from,to} and surfaces status_graph_violation", async () => {
+  const errorBody: ErrorResponse = {
+    error: { code: "status_graph_violation", message: "open → tested not allowed" },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/tickets/ticket-0001/transition": async (request) => {
+        const body = await request.json();
+        assertEquals(body.from, "open");
+        assertEquals(body.to, "tested");
+        return jsonResponse(errorBody, 403);
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const error = await assertRejects(
+      () => client.transitionTicket("ticket-0001", { from: "open", to: "tested" }),
+      KeniApiError,
+    );
+    assertEquals(error.code, "status_graph_violation");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("transitionTicket happy path returns the updated ticket", async () => {
+  const updated: TicketResponse = { ...TICKET_0001, status: "in_progress" };
+  const envelope: TicketEnvelope = { data: updated, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/tickets/ticket-0001/transition": () => jsonResponse(envelope),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.transitionTicket("ticket-0001", {
+      from: "open",
+      to: "in_progress",
+    });
+    assertEquals(result.data.status, "in_progress");
+  } finally {
+    await backend.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PRs: getPr / patchPrIntent / transitionPr / mergePr / listPrs?ticket=
+// ---------------------------------------------------------------------------
+
+const PR_0001: PRResponse = {
+  id: "pr-0001",
+  title: "Login form",
+  status: "approved",
+  ticket: "ticket-0001",
+  branch: "ticket-0001",
+  author: "alice",
+  created_at: "2026-05-04T07:00:00.000Z",
+  updated_at: "2026-05-04T07:00:00.000Z",
+  body: "Implements the login page",
+};
+
+Deno.test("getPr returns the typed envelope", async () => {
+  const envelope: PREnvelope = { data: PR_0001, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "GET /api/prs/pr-0001": () => jsonResponse(envelope),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.getPr("pr-0001");
+    assertEquals(result.data.id, "pr-0001");
+    assertEquals(result.data.status, "approved");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("patchPrIntent sends {intent} and returns the envelope", async () => {
+  const updated: PRResponse = { ...PR_0001, body: "Updated intent" };
+  const envelope: PREnvelope = { data: updated, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "PATCH /api/prs/pr-0001/intent": async (request) => {
+        const body = await request.json();
+        assertEquals(body.intent, "Updated intent");
+        return jsonResponse(envelope);
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.patchPrIntent("pr-0001", { intent: "Updated intent" });
+    assertEquals(result.data.body, "Updated intent");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("transitionPr sends {from,to} and returns the envelope", async () => {
+  const updated: PRResponse = { ...PR_0001, status: "merged" };
+  const envelope: PREnvelope = { data: updated, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/prs/pr-0001/transition": async (request) => {
+        const body = await request.json();
+        assertEquals(body.from, "approved");
+        assertEquals(body.to, "merged");
+        return jsonResponse(envelope);
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.transitionPr("pr-0001", { from: "approved", to: "merged" });
+    assertEquals(result.data.status, "merged");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("mergePr returns the merge envelope on success", async () => {
+  const envelope: MergePrEnvelope = {
+    data: { merge_commit_sha: "deadbeef1234" },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/prs/pr-0001/merge": () => jsonResponse(envelope),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.mergePr("pr-0001");
+    assertEquals(result.data.merge_commit_sha, "deadbeef1234");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("mergePr surfaces 409 merge_conflict as KeniApiError", async () => {
+  const errorBody: ErrorResponse = {
+    error: {
+      code: "merge_conflict",
+      message: "non fast-forward",
+      details: { reason: "non_fast_forward" },
+    },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/prs/pr-0001/merge": () => jsonResponse(errorBody, 409),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const error = await assertRejects(
+      () => client.mergePr("pr-0001"),
+      KeniApiError,
+    );
+    assertEquals(error.status, 409);
+    assertEquals(error.code, "merge_conflict");
+    assertEquals(error.details?.reason, "non_fast_forward");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("listPrs serialises the ticket filter as ?ticket=<id>", async () => {
+  const backend = await startMockBackend({
+    routes: {
+      "GET /api/prs": (_req, url) => {
+        assertEquals(url.searchParams.get("ticket"), "ticket-0001");
+        return jsonResponse({ data: [], project_id: "proj-1" });
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    await client.listPrs({ ticket: "ticket-0001" });
+  } finally {
+    await backend.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Activity: appendActivity + role filter
+// ---------------------------------------------------------------------------
+
+const COMMENT_ENTRY: ActivityEntryResponse = {
+  id: "01HW000000000000000000AAAA",
+  timestamp: "2026-05-04T07:00:00.000Z",
+  session_id: "ui",
+  agent: "user",
+  role: "user",
+  event: "ticket_comment",
+  summary: "Nice work",
+  refs: { ticket: "ticket-0001" },
+};
+
+Deno.test("appendActivity sends the typed body including refs.ticket", async () => {
+  const envelope: ActivityEnvelope = { data: COMMENT_ENTRY, project_id: "proj-1" };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/activity": async (request) => {
+        const body = await request.json();
+        assertEquals(body.event, "ticket_comment");
+        assertEquals(body.refs.ticket, "ticket-0001");
+        assertEquals(body.summary, "Nice work");
+        return jsonResponse(envelope, 201);
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.appendActivity({
+      session_id: "ui",
+      agent: "user",
+      role: "user",
+      event: "ticket_comment",
+      summary: "Nice work",
+      refs: { ticket: "ticket-0001" },
+    });
+    assertEquals(result.data.event, "ticket_comment");
+    assertEquals(result.data.refs.ticket, "ticket-0001");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("listActivity serialises agent + role + date range as query params", async () => {
+  const backend = await startMockBackend({
+    routes: {
+      "GET /api/activity": (_req, url) => {
+        assertEquals(url.searchParams.get("agent"), "alice");
+        assertEquals(url.searchParams.get("role"), "engineer");
+        assertEquals(url.searchParams.get("from"), "2026-05-01T00:00:00.000Z");
+        assertEquals(url.searchParams.get("to"), "2026-05-04T23:59:00.000Z");
+        return jsonResponse({ data: [], project_id: "proj-1" });
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    await client.listActivity({
+      agent: "alice",
+      role: "engineer",
+      from: "2026-05-01T00:00:00.000Z",
+      to: "2026-05-04T23:59:00.000Z",
+    });
   } finally {
     await backend.close();
   }

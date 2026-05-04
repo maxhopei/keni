@@ -9,16 +9,14 @@ import { KeniApiError } from "../../transport/apiClient.ts";
 import { AgentRosterPanel, ROSTER_REFETCH_DEBOUNCE_MS } from "./AgentRosterPanel.tsx";
 import type { ApiClient } from "../../transport/apiClient.ts";
 import type { EventsClient, EventsClientLifecycle } from "../../transport/eventsClient.ts";
+import { unusedApiStubs } from "../shared/testStubs.ts";
 import type {
   ActivityAppendedPayload,
-  ActivityQueryResponse,
   AgentEnvelope,
   AgentListResponse,
   AgentResponse,
   AgentStateChangedPayload,
   EventFrame,
-  PRListResponse,
-  TicketListResponse,
 } from "@keni/shared";
 
 const ALICE: AgentResponse = {
@@ -59,6 +57,7 @@ function makeFakeApiClient(opts: FakeApiOptions): { client: ApiClient; recorder:
     project_id: "proj-test",
   });
   const client: ApiClient = {
+    ...unusedApiStubs(),
     getProjectId: () => Promise.resolve("proj-test"),
     listAgents: () => {
       recorder.listAgentsCalls += 1;
@@ -81,10 +80,6 @@ function makeFakeApiClient(opts: FakeApiOptions): { client: ApiClient; recorder:
         project_id: "proj-test",
       });
     },
-    listTickets: () => Promise.resolve<TicketListResponse>({ data: [], project_id: "proj-test" }),
-    listPrs: () => Promise.resolve<PRListResponse>({ data: [], project_id: "proj-test" }),
-    listActivity: () =>
-      Promise.resolve<ActivityQueryResponse>({ data: [], project_id: "proj-test" }),
   };
   return { client, recorder };
 }

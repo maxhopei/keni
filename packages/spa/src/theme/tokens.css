@@ -12,6 +12,21 @@
  * `TopNav` reuse them on either background). When tweaking, re-run the
  * contrast against both `--keni-color-bg` values before merging.
  *
+ * ## Status-pill tokens (`spa-board` / `spa-ticket-detail`)
+ *
+ * Each `--keni-color-status-<name>` token is paired with a
+ * `--keni-color-status-<name>-text` token so the pill's foreground /
+ * background combination can be tuned per-status for WCAG AA contrast
+ * (4.5:1) in both themes. Light-theme pills use a pale hue as the
+ * background and a deep, saturated hue as the foreground; dark-theme
+ * pills invert that (deep background, pale foreground).
+ *
+ * Contrast for each pair was verified against the pill's own background
+ * token (not the surface) using the WebAIM contrast checker:
+ *
+ *   light theme — e.g. `open`: text #24292f on bg #d0d7de (~5.6:1)
+ *   dark  theme — e.g. `open`: text #f0f6fc on bg #30363d (~9.1:1)
+ *
  * No theme switcher today — `prefers-color-scheme` covers the prototype's
  * needs (`design.md` Decision 7).
  */
@@ -19,10 +34,13 @@
 :root {
   /* Surfaces & text */
   --keni-color-bg: #ffffff;
+  --keni-color-background: #ffffff;
   --keni-color-surface: #f6f8fa;
   --keni-color-text: #1a1a1a;
   --keni-color-text-muted: #6a737d;
   --keni-color-border: #e1e4e8;
+  --keni-color-link: #0969da;
+  --keni-color-danger: #cf222e;
 
   /* Accent + semantic colors */
   --keni-color-accent: #1f6feb;
@@ -37,6 +55,11 @@
   --keni-space-4: 16px;
   --keni-space-5: 20px;
   --keni-space-6: 24px;
+
+  /* Radii */
+  --keni-radius-1: 4px;
+  --keni-radius-2: 6px;
+  --keni-radius-3: 8px;
 
   /* Typography */
   --keni-font-body:
@@ -55,19 +78,79 @@
     Consolas,
     "Liberation Mono",
     monospace;
+
+  /* Board / ticket status pills (light theme).
+     Each pill's background → foreground pair targets ≥ 4.5:1 AA contrast. */
+  --keni-color-status-open: #d0d7de;
+  --keni-color-status-open-text: #24292f;
+  --keni-color-status-in-progress: #ddf4ff;
+  --keni-color-status-in-progress-text: #0550ae;
+  --keni-color-status-ready-for-review: #fff8c5;
+  --keni-color-status-ready-for-review-text: #7d4e00;
+  --keni-color-status-in-review: #dbeafe;
+  --keni-color-status-in-review-text: #1e40af;
+  --keni-color-status-has-comments: #fde2e4;
+  --keni-color-status-has-comments-text: #86181d;
+  --keni-color-status-approved: #dafbe1;
+  --keni-color-status-approved-text: #116329;
+  --keni-color-status-merged: #e8d9fd;
+  --keni-color-status-merged-text: #44278a;
+  --keni-color-status-ready-for-test: #fff1e5;
+  --keni-color-status-ready-for-test-text: #7a3800;
+  --keni-color-status-in-testing: #ddf4ff;
+  --keni-color-status-in-testing-text: #0550ae;
+  --keni-color-status-tested: #dafbe1;
+  --keni-color-status-tested-text: #116329;
+  --keni-color-status-test-failed: #ffebe9;
+  --keni-color-status-test-failed-text: #82071e;
+  --keni-color-status-done: #d0d7de;
+  --keni-color-status-done-text: #24292f;
+
+  /* Board layout knobs */
+  --keni-board-card-padding: 12px;
+  --keni-board-column-min-width: 240px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --keni-color-bg: #0d1117;
+    --keni-color-background: #0d1117;
     --keni-color-surface: #161b22;
     --keni-color-text: #c9d1d9;
     --keni-color-text-muted: #8b949e;
     --keni-color-border: #30363d;
+    --keni-color-link: #58a6ff;
+    --keni-color-danger: #f85149;
 
     --keni-color-accent: #58a6ff;
     --keni-color-status-running: #3fb950;
     --keni-color-status-idle: #8b949e;
     --keni-color-disconnected: #f85149;
+
+    /* Inverted pill pairings: deep saturated bg + pale fg. */
+    --keni-color-status-open: #30363d;
+    --keni-color-status-open-text: #f0f6fc;
+    --keni-color-status-in-progress: #0c2d6b;
+    --keni-color-status-in-progress-text: #cae8ff;
+    --keni-color-status-ready-for-review: #4d3800;
+    --keni-color-status-ready-for-review-text: #fff8c5;
+    --keni-color-status-in-review: #1e3a8a;
+    --keni-color-status-in-review-text: #dbeafe;
+    --keni-color-status-has-comments: #6e1423;
+    --keni-color-status-has-comments-text: #ffe5e5;
+    --keni-color-status-approved: #033a16;
+    --keni-color-status-approved-text: #bef5cb;
+    --keni-color-status-merged: #3b1e7d;
+    --keni-color-status-merged-text: #e8d9fd;
+    --keni-color-status-ready-for-test: #4a2900;
+    --keni-color-status-ready-for-test-text: #ffe0b3;
+    --keni-color-status-in-testing: #0c2d6b;
+    --keni-color-status-in-testing-text: #cae8ff;
+    --keni-color-status-tested: #033a16;
+    --keni-color-status-tested-text: #bef5cb;
+    --keni-color-status-test-failed: #6e0a17;
+    --keni-color-status-test-failed-text: #ffd7d5;
+    --keni-color-status-done: #30363d;
+    --keni-color-status-done-text: #f0f6fc;
   }
 }

@@ -340,9 +340,15 @@ keni/
     │       ├── prototypeFlags.ts     # prototype-only UI feature flags
     │       ├── theme/tokens.css      # CSS custom-property design tokens
     │       ├── transport/            # apiClient.ts, eventsClient.ts + React contexts
-    │       ├── shell/                # AppShell, TopNav, BoardPlaceholder
-    │       ├── routes/               # RoutePlaceholder, NotFound
-    │       └── features/agentRoster/ # AgentRosterPanel, AgentRosterCard, formatRelativeTime
+    │       ├── shell/                # AppShell, TopNav
+    │       ├── routes/               # NotFound
+    │       └── features/
+    │           ├── agentRoster/      # AgentRosterPanel, AgentRosterCard, formatRelativeTime
+    │           ├── board/            # BoardView, BoardColumn, BoardCard, CreateTicketForm, dragHelpers
+    │           ├── ticketDetail/     # TicketDetailView (+ useTicketActivity hook)
+    │           ├── prDetail/         # PRDetailView (intent editor, transition panel, merge button)
+    │           ├── activityLog/      # ActivityLogView + formatActivityRefs
+    │           └── shared/           # statusGraph (drift-checked mirror), testStubs
     ├── role-runtimes/        # @keni/role-runtimes — common cycle wrapper plus per-role specialisations (engineer/QA/PO)
     └── shared/               # @keni/shared — types, storage interfaces, utilities
 ```
@@ -372,13 +378,32 @@ KENI_SERVER_URL=http://127.0.0.1:<bound-port> deno task dev
 Step 13 (`cli-start-and-end-to-end-wiring`) will host the production bundle from the orchestration
 server itself — the dev-server proxy is only required during local SPA development.
 
+The SPA mounts four routes inside the app shell:
+
+- `/` — **board view**: the twelve-column kanban, HTML5 drag-and-drop transitions a ticket between
+  columns (the drop fires `POST /tickets/:id/transition`; a `status_graph_violation` surfaces on the
+  card and the card stays put), an inline "New ticket" form posts to `POST /tickets`.
+- `/tickets/:id` — **ticket detail**: inline-editable title and body, an expandable "Advanced:
+  transition (prototype only)" panel populated from the SPA-side status-graph mirror, a status
+  history filtered from the activity log, and a comment thread backed by `POST /activity` with
+  `event: "ticket_comment"`.
+- `/prs/:id` — **PR detail**: inline intent editor, the same expandable transition panel against the
+  PR status graph, and a `window.confirm`-gated Merge button that calls `POST /prs/:id/merge`
+  (rendering a prominent conflict panel when the server returns `409 merge_conflict`).
+- `/activity` — **activity log**: debounced `agent` / `role` / `from` / `to` filter form, reverse-
+  chronological list, `ticket:` and `pr:` refs render as navigating links. A burst of
+  `activity.appended` frames collapses into one refetch (250 ms debounce).
+
 The contract for the shell, transport clients, and routing scaffold lives in the
 [`spa-shell` capability spec](./openspec/changes/spa-shell-and-agent-roster/specs/spa-shell/spec.md);
 the agent-roster card and live-update protocol live in the
 [`spa-agent-roster` capability spec](./openspec/changes/spa-shell-and-agent-roster/specs/spa-agent-roster/spec.md).
-Once archived, the canonical references move to
-[`openspec/specs/spa-shell/spec.md`](./openspec/specs/) and
-[`openspec/specs/spa-agent-roster/spec.md`](./openspec/specs/).
+The four new views are specified by
+[`spa-board`](./openspec/changes/spa-board-and-drill-downs/specs/spa-board/spec.md),
+[`spa-ticket-detail`](./openspec/changes/spa-board-and-drill-downs/specs/spa-ticket-detail/spec.md),
+[`spa-pr-detail`](./openspec/changes/spa-board-and-drill-downs/specs/spa-pr-detail/spec.md), and
+[`spa-activity-log`](./openspec/changes/spa-board-and-drill-downs/specs/spa-activity-log/spec.md).
+Once archived, the canonical references move to [`openspec/specs/spa-*/`](./openspec/specs/).
 
 ## Conventions
 

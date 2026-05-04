@@ -1,57 +1,22 @@
 import "../test_setup.ts";
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { assert, assertEquals } from "@std/assert";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { AppShell } from "./AppShell.tsx";
-import { BoardPlaceholder } from "./BoardPlaceholder.tsx";
-import RoutePlaceholder from "../routes/RoutePlaceholder.tsx";
+import { BoardView } from "../features/board/BoardView.tsx";
+import { TicketDetailView } from "../features/ticketDetail/TicketDetailView.tsx";
+import { PRDetailView } from "../features/prDetail/PRDetailView.tsx";
+import { ActivityLogView } from "../features/activityLog/ActivityLogView.tsx";
 import { NotFound } from "../routes/NotFound.tsx";
 import { ApiClientProvider } from "../transport/ApiClientContext.tsx";
 import { EventsClientProvider } from "../transport/EventsClientContext.tsx";
+import { unusedApiStubs } from "../features/shared/testStubs.ts";
 import type { ApiClient } from "../transport/apiClient.ts";
 import type { EventsClient } from "../transport/eventsClient.ts";
-import type {
-  ActivityQueryResponse,
-  AgentEnvelope,
-  AgentListResponse,
-  PRListResponse,
-  TicketListResponse,
-} from "@keni/shared";
 
 function fakeApiClient(): ApiClient {
-  return {
-    getProjectId: () => Promise.resolve("proj-test"),
-    listAgents: () => Promise.resolve<AgentListResponse>({ data: [], project_id: "proj-test" }),
-    pauseAgent: (id: string) =>
-      Promise.resolve<AgentEnvelope>({
-        data: {
-          id,
-          role: "engineer",
-          status: "idle",
-          last_activity: null,
-          last_active_at: null,
-          paused: true,
-        },
-        project_id: "proj-test",
-      }),
-    resumeAgent: (id: string) =>
-      Promise.resolve<AgentEnvelope>({
-        data: {
-          id,
-          role: "engineer",
-          status: "idle",
-          last_activity: null,
-          last_active_at: null,
-          paused: false,
-        },
-        project_id: "proj-test",
-      }),
-    listTickets: () => Promise.resolve<TicketListResponse>({ data: [], project_id: "proj-test" }),
-    listPrs: () => Promise.resolve<PRListResponse>({ data: [], project_id: "proj-test" }),
-    listActivity: () =>
-      Promise.resolve<ActivityQueryResponse>({ data: [], project_id: "proj-test" }),
-  };
+  return unusedApiStubs();
 }
 
 function fakeEventsClient(): EventsClient {
@@ -74,19 +39,10 @@ function renderShell(opts: {
         <MemoryRouter initialEntries={[opts.initialPath]}>
           <Routes>
             <Route element={<AppShell chatPanelEnabledOverride={opts.chatPanelEnabledOverride} />}>
-              <Route index element={<BoardPlaceholder />} />
-              <Route
-                path="tickets/:id"
-                element={<RoutePlaceholder title="Ticket detail" stepRef="step 11" />}
-              />
-              <Route
-                path="prs/:id"
-                element={<RoutePlaceholder title="PR detail" stepRef="step 11" />}
-              />
-              <Route
-                path="activity"
-                element={<RoutePlaceholder title="Activity log" stepRef="step 11" />}
-              />
+              <Route index element={<BoardView />} />
+              <Route path="tickets/:id" element={<TicketDetailView />} />
+              <Route path="prs/:id" element={<PRDetailView />} />
+              <Route path="activity" element={<ActivityLogView />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
@@ -111,7 +67,7 @@ describe({
     );
   }
 
-  it("renders the three-region grid when the chat panel is hidden", () => {
+  it("renders the three-region grid when the chat panel is hidden", async () => {
     const { container } = renderShell({ initialPath: "/", chatPanelEnabledOverride: false });
     const shell = container.querySelector(".keni-app-shell");
     assert(shell !== null);
@@ -119,27 +75,52 @@ describe({
     assertEquals(directChildrenByTag(shell, "header").length, 1);
     assertEquals(directChildrenByTag(shell, "aside").length, 1);
     assertEquals(directChildrenByTag(shell, "main").length, 1);
+    await waitFor(() => {
+      assert(container.querySelector('[data-testid="board"]') !== null);
+    });
   });
 
-  it("renders the chat region as a second <aside> when enabled", () => {
+  it("renders the chat region as a second <aside> when enabled", async () => {
     const { container } = renderShell({ initialPath: "/", chatPanelEnabledOverride: true });
     const shell = container.querySelector(".keni-app-shell");
     assert(shell !== null);
     assertEquals(shell.getAttribute("data-chat-visible"), "true");
     assertEquals(directChildrenByTag(shell, "aside").length, 2);
+    await waitFor(() => {
+      assert(container.querySelector('[data-testid="board"]') !== null);
+    });
   });
 
-  it("index route shows the board placeholder", () => {
+  it("index route mounts the BoardView and renders its loading state initially", () => {
     const { getByTestId } = renderShell({ initialPath: "/" });
-    assert(getByTestId("board-placeholder") !== null);
+    // listTickets resolves asynchronously via unusedApiStubs, so on the
+    // first synchronous render the loading element is present.
+    assert(getByTestId("board-loading") !== null);
   });
 
-  it("/tickets/:id surfaces the param via RoutePlaceholder", () => {
-    const { getByTestId } = renderShell({ initialPath: "/tickets/abc" });
-    const node = getByTestId("route-placeholder");
-    assert(node.textContent?.includes("Ticket detail"));
-    const param = getByTestId("route-param-id");
-    assert(param.textContent?.includes("abc"));
+  it("/tickets/:id mounts the TicketDetailView", async () => {
+    const { getByTestId } = renderShell({ initialPath: "/tickets/ticket-0001" });
+    assert(getByTestId("ticket-loading") !== null);
+    // Once getTicket resolves, the detail container renders.
+    await waitFor(() => {
+      assert(getByTestId("ticket-detail") !== null);
+    });
+  });
+
+  it("/prs/:id mounts the PRDetailView", async () => {
+    const { getByTestId } = renderShell({ initialPath: "/prs/pr-0001" });
+    assert(getByTestId("pr-loading") !== null);
+    await waitFor(() => {
+      assert(getByTestId("pr-detail") !== null);
+    });
+  });
+
+  it("/activity mounts the ActivityLogView", async () => {
+    const { getByTestId } = renderShell({ initialPath: "/activity" });
+    assert(getByTestId("activity-loading") !== null);
+    await waitFor(() => {
+      assert(getByTestId("activity-log") !== null);
+    });
   });
 
   it("unknown path renders the NotFound page", () => {

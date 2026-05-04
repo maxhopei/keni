@@ -3,6 +3,11 @@
 @import url("./shell/TopNav.css");
 @import url("./features/agentRoster/AgentRosterPanel.css");
 @import url("./features/agentRoster/AgentRosterCard.css");
+@import url("./features/board/BoardView.css");
+@import url("./features/board/BoardCard.css");
+@import url("./features/ticketDetail/TicketDetailView.css");
+@import url("./features/prDetail/PRDetailView.css");
+@import url("./features/activityLog/ActivityLogView.css");
 
 *,
 *::before,

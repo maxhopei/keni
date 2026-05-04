@@ -1,7 +1,9 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AppShell } from "./shell/AppShell.tsx";
-import { BoardPlaceholder } from "./shell/BoardPlaceholder.tsx";
-import RoutePlaceholder from "./routes/RoutePlaceholder.tsx";
+import { BoardView } from "./features/board/BoardView.tsx";
+import { TicketDetailView } from "./features/ticketDetail/TicketDetailView.tsx";
+import { PRDetailView } from "./features/prDetail/PRDetailView.tsx";
+import { ActivityLogView } from "./features/activityLog/ActivityLogView.tsx";
 import { NotFound } from "./routes/NotFound.tsx";
 
 export function App() {
@@ -9,19 +11,10 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<AppShell />}>
-          <Route index element={<BoardPlaceholder />} />
-          <Route
-            path="tickets/:id"
-            element={<RoutePlaceholder title="Ticket detail" stepRef="step 11" />}
-          />
-          <Route
-            path="prs/:id"
-            element={<RoutePlaceholder title="PR detail" stepRef="step 11" />}
-          />
-          <Route
-            path="activity"
-            element={<RoutePlaceholder title="Activity log" stepRef="step 11" />}
-          />
+          <Route index element={<BoardView />} />
+          <Route path="tickets/:id" element={<TicketDetailView />} />
+          <Route path="prs/:id" element={<PRDetailView />} />
+          <Route path="activity" element={<ActivityLogView />} />
         </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>
