@@ -39,11 +39,19 @@ export interface EventsClient {
 
 export interface CreateEventsClientOpts {
   /**
-   * WebSocket URL. Default `"/events"` — relative path; relies on
-   * `URL` resolution against `globalThis.location` and the Vite dev
-   * proxy's `ws: true` to route to the orchestration server.
+   * WebSocket URL. Default `"/events?role=user"` — relative path;
+   * relies on `URL` resolution against `globalThis.location` and the
+   * Vite dev proxy's `ws: true` to route to the orchestration server.
    *
-   * Tests inject an absolute `ws://127.0.0.1:<port>/events` URL.
+   * The `?role=user` query parameter is mandatory: browsers cannot set
+   * arbitrary headers on `new WebSocket(...)`, so the orchestration
+   * server's role guard reads the role from the query string on the
+   * upgrade path (per the `orchestration-server` capability spec).
+   * Without it, the upgrade is refused with `400 missing_role` and the
+   * client immediately falls into the disconnected reconnect loop.
+   *
+   * Tests inject an absolute `ws://127.0.0.1:<port>/events?role=user`
+   * URL.
    */
   readonly url?: string;
   /** Initial backoff in ms (default 1000 — `design.md` Decision 5). */
@@ -84,7 +92,7 @@ function resolveUrl(url: string): string {
 }
 
 export function createEventsClient(opts: CreateEventsClientOpts = {}): EventsClient {
-  const url = resolveUrl(opts.url ?? "/events");
+  const url = resolveUrl(opts.url ?? "/events?role=user");
   const backoffInitialMs = opts.backoffInitialMs ?? 1000;
   const backoffCapMs = opts.backoffCapMs ?? 30000;
   const WebSocketCtor = opts.webSocketImpl ?? WebSocket;

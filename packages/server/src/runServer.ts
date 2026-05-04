@@ -146,13 +146,21 @@ export interface RunServerDeps {
    */
   readonly mergeMutex?: Mutex;
   /**
-   * Build the engineer's `AgentRunner` for `agentConfig`. The default is
-   * to *skip* engineer-runner registration (the merge endpoint, ticket
-   * REST, MCP server, and provisioner all still wire up; the scheduler
-   * simply logs `runner.missing` on engineer ticks until a follow-up
-   * change wires the production coding-agent invoker). Tests pass a
-   * stub returning a deterministic runner so the wiring sequence can
-   * be observed without launching real subprocesses.
+   * Build the engineer's `AgentRunner` for `agentConfig`. When omitted,
+   * `runServer` skips engineer-runner registration; the merge endpoint,
+   * ticket REST, MCP server, and provisioner all still wire up, and
+   * the scheduler logs `runner.missing` on engineer ticks until a
+   * runner is registered.
+   *
+   * Production callers (i.e. `keni start`) wire this via
+   * `buildProductionEngineerRunnerFactory(...)` from
+   * `packages/cli/src/start/engineerRunner.ts` — that helper resolves
+   * each agent's `coding_agent_cli`, looks it up in the closed
+   * `codingAgentCliRegistry` from `@keni/role-runtimes`, and either
+   * returns a fully-constructed `EngineerAgentRunner` or logs
+   * `engineer.runner_skipped` and returns `null`. Tests pass a stub
+   * returning a deterministic runner so the wiring sequence can be
+   * observed without launching real subprocesses.
    *
    * @returns an `AgentRunner` to register, or `null` to skip this engineer.
    */

@@ -18,6 +18,8 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { join } from "@std/path";
 import {
   type AgentConfig,
+  type AgentListResponse,
+  type ErrorResponse,
   InMemoryActivityLogStore,
   InMemoryConfigStore,
   InMemoryPRStore,
@@ -252,3 +254,61 @@ Deno.test("static SPA: staticAssetsRoot without index.html → createServer thro
     await Deno.remove(empty, { recursive: true });
   }
 });
+
+// ----------------------------------------------------------------------------
+// /api/<x> alias coverage in production-mode SPA serving (per the
+// `spa-api-prefix-alias` change). The static SPA fallthrough must NOT
+// swallow `/api/*` paths into `index.html` — `/api` is in `REST_PREFIXES`,
+// so a matched `/api/<x>` REST handler runs and an unmatched
+// `/api/<typo>` returns the documented 404 envelope.
+// ----------------------------------------------------------------------------
+
+Deno.test(
+  "static SPA: GET /api/agents returns the REST envelope, NOT index.html",
+  async () => {
+    const fx = await makeStaticBundle();
+    try {
+      const roster: readonly AgentConfig[] = [{ id: "alice", role: "engineer" }];
+      const app = createServer(
+        { ...makeDeps(roster), staticAssetsRoot: fx.root },
+        { projectId: PROJECT_ID },
+      );
+      const res = await app.fetch(authedRequest("http://x/api/agents"));
+      assertEquals(res.status, 200);
+      assertEquals(res.headers.get("Content-Type")?.startsWith("application/json"), true);
+      const body = (await res.json()) as AgentListResponse;
+      assertEquals(body.project_id, PROJECT_ID);
+      assertEquals(body.data.length, 1);
+      assertEquals(body.data[0]!.id, "alice");
+      assertEquals(body.data[0]!.role, "engineer");
+    } finally {
+      await fx.cleanup();
+    }
+  },
+);
+
+Deno.test(
+  "static SPA: GET /api/<unknown> returns the 404 envelope, NOT index.html",
+  async () => {
+    const fx = await makeStaticBundle();
+    try {
+      const app = createServer(
+        { ...makeDeps(), staticAssetsRoot: fx.root },
+        { projectId: PROJECT_ID },
+      );
+      const res = await app.fetch(authedRequest("http://x/api/typo"));
+      assertEquals(res.status, 404);
+      const ctype = res.headers.get("Content-Type") ?? "";
+      assertEquals(
+        ctype.startsWith("text/html"),
+        false,
+        "GET /api/<unknown> must NOT serve text/html (the SPA's index.html)",
+      );
+      const body = (await res.json()) as ErrorResponse;
+      assertEquals(body.error.code, "store_not_found");
+      assertEquals(body.project_id, PROJECT_ID);
+    } finally {
+      await fx.cleanup();
+    }
+  },
+);

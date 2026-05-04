@@ -305,3 +305,148 @@ Deno.test(
     assertEquals(typeof body.error.details?.id, "string");
   },
 );
+
+// ----------------------------------------------------------------------------
+// /api/<x> alias coverage (per the `spa-api-prefix-alias` change).
+//
+// Every REST and WS route group is mounted at two equivalent base paths:
+// the canonical bare prefix (`/tickets`, `/agents`, ...) and its
+// `/api/`-prefixed mirror. The two URLs hit the same handler, the same
+// store, and the same event bus. The tests below assert that contract:
+// envelope-equality across URL forms, single-emit on a write through the
+// prefixed URL, and the unauthenticated `/health` carve-out applying to
+// the prefixed mirror too.
+// ----------------------------------------------------------------------------
+
+Deno.test(
+  "every REST GET succeeds under both /<x> and /api/<x> with identical envelopes",
+  async () => {
+    const roster: readonly AgentConfig[] = [{ id: "alice", role: "engineer" }];
+    const deps = makeDeps(roster);
+    const app = createServer(deps, { projectId: PROJECT_ID });
+
+    const cases = [
+      { bare: "/tickets", prefixed: "/api/tickets" },
+      { bare: "/prs", prefixed: "/api/prs" },
+      { bare: "/activity", prefixed: "/api/activity" },
+      { bare: "/agents", prefixed: "/api/agents" },
+    ];
+
+    for (const { bare, prefixed } of cases) {
+      const bareRes = await app.fetch(authedRequest(`http://x${bare}`));
+      const prefixedRes = await app.fetch(authedRequest(`http://x${prefixed}`));
+      assertEquals(bareRes.status, 200, `${bare} should be 200`);
+      assertEquals(prefixedRes.status, 200, `${prefixed} should be 200`);
+      const bareBody = await bareRes.json();
+      const prefixedBody = await prefixedRes.json();
+      assertEquals(
+        prefixedBody,
+        bareBody,
+        `${prefixed} envelope must equal ${bare} envelope`,
+      );
+      // Per-call X-Keni-Request-Id is the only documented difference.
+      assert(bareRes.headers.get("X-Keni-Request-Id"));
+      assert(prefixedRes.headers.get("X-Keni-Request-Id"));
+      assert(
+        bareRes.headers.get("X-Keni-Request-Id") !==
+          prefixedRes.headers.get("X-Keni-Request-Id"),
+        "request ids should be distinct across two requests",
+      );
+    }
+  },
+);
+
+Deno.test(
+  "a POST through /api/tickets round-trips on a GET /tickets and emits exactly one EventFrame",
+  async () => {
+    const deps = makeDeps();
+    const app = createServer(deps, { projectId: PROJECT_ID });
+
+    const createRes = await app.fetch(
+      new Request("http://x/api/tickets", {
+        method: "POST",
+        headers: {
+          "X-Keni-Role": "user",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title: "alpha", priority: 1 }),
+      }),
+    );
+    assertEquals(createRes.status, 201);
+    const createBody = (await createRes.json()) as { data: { id: string } };
+    const ticketId = createBody.data.id;
+    assert(typeof ticketId === "string" && ticketId.length > 0);
+
+    const listRes = await app.fetch(authedRequest("http://x/tickets"));
+    assertEquals(listRes.status, 200);
+    const listBody = (await listRes.json()) as TicketListResponse;
+    assertEquals(listBody.data.length, 1);
+    assertEquals(listBody.data[0]!.id, ticketId);
+
+    // The dual-mount must NOT cause duplicate frame emission: exactly
+    // one ticket.created frame for the operation, regardless of which
+    // URL form was used to issue it.
+    const created = deps.busBuffer.filter((f) => f.event === "ticket.created");
+    assertEquals(created.length, 1);
+    if (created[0]!.event === "ticket.created") {
+      assertEquals(created[0]!.payload.ticket_id, ticketId);
+    }
+  },
+);
+
+Deno.test(
+  "POST /api/agents/:id/pause emits exactly one agent.state_changed frame",
+  async () => {
+    const roster: readonly AgentConfig[] = [{ id: "alice", role: "engineer" }];
+    const deps = makeDeps(roster);
+    const app = createServer(deps, { projectId: PROJECT_ID });
+
+    const res = await app.fetch(
+      new Request("http://x/api/agents/alice/pause", {
+        method: "POST",
+        headers: { "X-Keni-Role": "user" },
+      }),
+    );
+    assertEquals(res.status, 200);
+
+    const stateChanged = deps.busBuffer.filter((f) => f.event === "agent.state_changed");
+    assertEquals(stateChanged.length, 1);
+    if (stateChanged[0]!.event === "agent.state_changed") {
+      assertEquals(stateChanged[0]!.payload.agent_id, "alice");
+      assertEquals(stateChanged[0]!.payload.paused, true);
+    }
+  },
+);
+
+Deno.test("GET /api/health is unauthenticated and returns the documented health envelope", async () => {
+  const deps = makeDeps();
+  const app = createServer(deps, { projectId: PROJECT_ID });
+  // No X-Keni-Role header — the carve-out exempts /api/health from
+  // roleIdentity (parity with the bare /health route).
+  const res = await app.fetch(new Request("http://x/api/health"));
+  assertEquals(res.status, 200);
+  const body = (await res.json()) as { data: { status: string }; project_id: string };
+  assertEquals(body.data.status, "ok");
+  assertEquals(body.project_id, PROJECT_ID);
+});
+
+Deno.test(
+  "createServer mounts /api/events and returns 101 on a valid WS upgrade with ?role=user",
+  async () => {
+    const deps = makeDeps();
+    const app = createServer(deps, { projectId: PROJECT_ID });
+    const res = await app.fetch(
+      new Request("http://x/api/events?role=user", {
+        headers: {
+          "Upgrade": "websocket",
+          "Connection": "Upgrade",
+          "Sec-WebSocket-Version": "13",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        },
+      }),
+    );
+    // Parity with the bare-/events upgrade test above: the ?role=
+    // fallback now matches /api/events too, so the upgrade succeeds.
+    assertEquals(res.status, 101);
+  },
+);

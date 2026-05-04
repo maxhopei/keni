@@ -9,8 +9,16 @@
  * constant by design — that prevents a future contributor from
  * accidentally swallowing a new endpoint into the SPA fallthrough.
  *
- * The order of entries is the order of registration in `createServer`;
- * the value's identity (`as const`) keeps it usable as a discriminated
+ * The first six entries are the bare-prefix REST groups in the order
+ * they are registered in `createServer`. The seventh entry, `/api`, is
+ * a single bookend covering the entire `/api/<x>` mirror surface that
+ * `createServer` mounts as same-origin SPA-friendly aliases for the
+ * bare prefixes (per the `spa-api-prefix-alias` change). Adding a
+ * future REST group adds one bare entry here; the `/api` bookend
+ * continues to cover its prefixed mirror automatically — no second
+ * edit required.
+ *
+ * The value's identity (`as const`) keeps it usable as a discriminated
  * union element by future TypeScript code.
  *
  * @module
@@ -23,6 +31,7 @@ export const REST_PREFIXES = [
   "/activity",
   "/health",
   "/events",
+  "/api",
 ] as const;
 
 /**

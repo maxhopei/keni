@@ -5,7 +5,7 @@
  * client's lifecycle state machine and frame parsing.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { createEventsClient, type EventsClientLifecycle } from "./eventsClient.ts";
 import type { EventFrame } from "@keni/shared";
 
@@ -237,6 +237,31 @@ Deno.test("close() cancels pending reconnect timers and stops the loop", () => {
   assertEquals(MockWebSocket.instances.length, 1);
   assertEquals(lifecycle.at(-1), "disconnected");
 });
+
+Deno.test(
+  "default URL falls back to /events?role=user when no opts.url is provided " +
+    "(orchestration server's WS upgrade refuses 400 missing_role without it, " +
+    "since browsers cannot set arbitrary headers on `new WebSocket(...)`)",
+  () => {
+    MockWebSocket.instances.length = 0;
+    const noopSetTimeout = ((_cb: () => void, _ms?: number) => 0) as unknown as typeof setTimeout;
+    const noopClearTimeout = (() => {}) as unknown as typeof clearTimeout;
+    const client = createEventsClient({
+      webSocketImpl: MockWebSocket as unknown as typeof WebSocket,
+      setTimeoutImpl: noopSetTimeout,
+      clearTimeoutImpl: noopClearTimeout,
+    });
+    client.start();
+    assertEquals(MockWebSocket.instances.length, 1);
+    const url = MockWebSocket.instances[0]!.url;
+    assertStringIncludes(url, "/events?role=user");
+    assert(
+      url.startsWith("ws://") || url.startsWith("wss://"),
+      `expected ws(s):// scheme on the default URL, got: ${url}`,
+    );
+    client.close();
+  },
+);
 
 Deno.test("event and lifecycle unsubscribers stop further callbacks", () => {
   const { client, frames, lifecycle } = setupClient();

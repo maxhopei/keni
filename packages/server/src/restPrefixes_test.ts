@@ -16,7 +16,23 @@ Deno.test("REST_PREFIXES equals the documented closed list in registration order
     "/activity",
     "/health",
     "/events",
+    "/api",
   ]);
+});
+
+Deno.test("isRestPrefixed accepts the /api mirror at every depth", () => {
+  assert(isRestPrefixed("/api"));
+  assert(isRestPrefixed("/api/agents"));
+  assert(isRestPrefixed("/api/tickets/ticket-0001/transition"));
+  assert(isRestPrefixed("/api/prs/pr-0001/merge"));
+  assert(isRestPrefixed("/api/activity"));
+  assert(isRestPrefixed("/api/events"));
+  assert(isRestPrefixed("/api/health"));
+});
+
+Deno.test("isRestPrefixed rejects /api-shaped partial matches that are not on a path boundary", () => {
+  assertFalse(isRestPrefixed("/apifoo"));
+  assertFalse(isRestPrefixed("/apiagents"));
 });
 
 Deno.test("isRestPrefixed matches the prefix exactly", () => {

@@ -14,7 +14,13 @@
 
 import { join } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
-import { type ProjectConfig, resolveGlobalPaths, resolveProjectPaths } from "@keni/shared";
+import {
+  type GlobalConfig,
+  type ProjectConfig,
+  type ResolvedConfig,
+  resolveGlobalPaths,
+  resolveProjectPaths,
+} from "@keni/shared";
 import { ProjectStateError } from "../init/errors.ts";
 import type { ParsedStartArgs } from "./args.ts";
 
@@ -38,6 +44,15 @@ export type SpaSection =
 /** Loader output. */
 export interface LoadedKeniConfig {
   readonly projectConfig: ProjectConfig;
+  readonly globalConfig: GlobalConfig;
+  /**
+   * Shallow merge of {@link projectConfig} over {@link globalConfig}.
+   * Consumed by `runStart` to forward into composition helpers that
+   * read across both layers (e.g.
+   * {@link import("./engineerRunner.ts").buildProductionEngineerRunnerFactory}
+   * reads `coding_agent_cli` here).
+   */
+  readonly resolvedConfig: ResolvedConfig;
   readonly startConfig: KeniStartConfig;
 }
 
@@ -82,9 +97,20 @@ export async function loadKeniConfig(input: LoadKeniConfigInput): Promise<Loaded
   const projectConfig = projectYaml as unknown as ProjectConfig;
 
   const globalYaml = await readYamlOrNull(globalPaths.globalConfig);
+  const globalConfig = (globalYaml ?? {}) as unknown as GlobalConfig;
 
   const startConfig = mergeStartConfig(globalYaml ?? {}, projectYaml);
-  return { projectConfig, startConfig };
+  // ResolvedConfig is a shallow merge with project fields overriding
+  // global ones (per the documented `ConfigStore.resolve()` contract in
+  // `@keni/shared/storage/config/interface.ts`). The cast through
+  // `unknown` matches the same loose-validation posture as
+  // `projectConfig`/`globalConfig` above; fine-grained schema
+  // validation runs inside `runServer`.
+  const resolvedConfig: ResolvedConfig = {
+    ...(globalYaml ?? {}),
+    ...projectYaml,
+  } as unknown as ResolvedConfig;
+  return { projectConfig, globalConfig, resolvedConfig, startConfig };
 }
 
 /**

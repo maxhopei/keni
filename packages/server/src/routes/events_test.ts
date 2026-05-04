@@ -68,12 +68,23 @@ function makeTestApp(opts: {
   app.use(requestLog(logSink, PROJECT_ID));
   app.use(
     roleIdentity({
-      fallback: (c) => c.req.path === "/events" ? c.req.query("role") : undefined,
+      // Match the production predicate from createServer.ts: the
+      // ?role= query-parameter fallback fires on /events AND on its
+      // /api/events same-origin alias (per the `spa-api-prefix-alias`
+      // change). Tests below exercise both URL forms.
+      fallback: (c) => {
+        const p = c.req.path;
+        return (p === "/events" || p === "/api/events") ? c.req.query("role") : undefined;
+      },
     }),
   );
   app.onError(errorBoundary(PROJECT_ID));
 
+  // Dual-mount /events and /api/events so the harness matches the
+  // production routing from createServer.ts. Each call to eventsRoute
+  // returns a fresh Hono sub-app sharing the same bus by closure.
   app.route("/events", eventsRoute(bus, opts.heartbeatSeconds));
+  app.route("/api/events", eventsRoute(bus, opts.heartbeatSeconds));
   if (opts.mountTickets) {
     app.route("/tickets", ticketsRoutes(new InMemoryTicketStore(), bus, PROJECT_ID));
   }
@@ -224,6 +235,41 @@ Deno.test("GET /events upgrades successfully with ?role=user (real port)", async
     await handle.abort();
   }
 });
+
+Deno.test(
+  "GET /api/events upgrades successfully with ?role=user and frames flow end-to-end (real port)",
+  async () => {
+    // Parity with the bare /events upgrade test above. The
+    // `spa-api-prefix-alias` change registers /api/events as a
+    // same-origin alias so SPA clients can connect via the prefixed
+    // URL form without a Vite proxy.
+    const { app, bus } = makeTestApp();
+    const handle = await bindTestServer(app);
+    try {
+      const ws = await openWebSocket(`ws://127.0.0.1:${handle.port}/api/events?role=user`);
+      assertEquals(ws.readyState, WebSocket.OPEN);
+
+      const messagePromise = nextMessage(ws);
+      const payload: TicketCreatedPayload = {
+        ticket_id: "ticket-0001",
+        status: "open",
+      };
+      const emitted = emitFrame(bus, PROJECT_ID, "ticket.created", payload);
+
+      const raw = await messagePromise;
+      const received = JSON.parse(raw) as EventFrame;
+      assertEquals(received.id, emitted.id);
+      assertEquals(received.event, "ticket.created");
+      assertEquals(received.project_id, PROJECT_ID);
+      assertEquals(received.payload, payload);
+
+      ws.close();
+      await awaitClose(ws);
+    } finally {
+      await handle.abort();
+    }
+  },
+);
 
 Deno.test("GET /events upgrades successfully with X-Keni-Role header (raw socket)", async () => {
   // Deno's built-in `WebSocket` client cannot set custom headers on the

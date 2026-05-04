@@ -31,15 +31,25 @@
 import type { AgentConfig, ProjectConfig } from "@keni/shared";
 import {
   type AgentRuntimeStateStore,
+  consoleSchedulerLogger,
+  createMcpHttpClient,
+  MCP_ENTRY_PATH,
   runServer,
   type RunServerDeps,
   type Scheduler,
+  type SchedulerLogger,
   type ServerDeps,
   type StartedServer,
   startServer as defaultStartServer,
   type StartServerOptions,
 } from "@keni/server";
-import type { WorkspaceProvisioner } from "@keni/role-runtimes";
+import {
+  type CodingAgentCliEntry,
+  codingAgentCliRegistry,
+  type EngineerActivityHttpClient,
+  type WorkspaceProvisioner,
+} from "@keni/role-runtimes";
+import { buildProductionEngineerRunnerFactory } from "./engineerRunner.ts";
 import type { DispatcherIO } from "../main.ts";
 import { ProjectStateError, UsageError } from "../init/errors.ts";
 import { type ParsedStartArgs, parseStartArgs as parseStartArgsImpl } from "./args.ts";
@@ -101,6 +111,27 @@ export interface RunStartDeps {
   readonly runServer?: typeof runServer;
   /** Override for the engineer-runner factory passed through `runServer`. */
   readonly makeEngineerRunner?: RunServerDeps["makeEngineerRunner"];
+  /**
+   * Test seam to inject a captured scheduler logger so assertions can
+   * inspect the production helper's `engineer.runner_skipped` warn line
+   * and the scheduler's per-tick lines from the same buffer. Production
+   * `keni start` leaves this `undefined` and `runStart` defaults to
+   * {@link consoleSchedulerLogger}.
+   */
+  readonly schedulerLogger?: SchedulerLogger;
+  /**
+   * Test seam to extend the production `codingAgentCliRegistry` with
+   * fixture entries (e.g. a fake-coding-agent script under
+   * `Deno.Command`) without changing the closed `KnownCli` production
+   * union. The override is shallow-merged on top of
+   * `codingAgentCliRegistry`; production callers leave it `undefined`
+   * and the helper sees the unmodified registry. Ignored when
+   * {@link makeEngineerRunner} is supplied (the test seam wins
+   * verbatim — see `cli-start` capability spec).
+   */
+  readonly codingAgentCliRegistryOverride?: Readonly<
+    Record<string, CodingAgentCliEntry>
+  >;
   /**
    * External shutdown signal — when aborted, runStart treats it
    * exactly like a first SIGINT. The smoke test uses this to drive
@@ -287,12 +318,41 @@ export async function runStart(
 
   const runServerImpl = deps.runServer ?? runServer;
   const runServerArgs = synthesiseRunServerArgs(args.projectDir, startConfig);
+
+  // The scheduler logger is constructed here (not inside `runServer`)
+  // so the production engineer-runner helper can share the same sink
+  // for its boot-time `engineer.runner_skipped` warn line. Both the
+  // helper's warns and the scheduler's per-tick lines fan out through
+  // one logger instance — identical formatting, identical destination.
+  const schedulerLogger: SchedulerLogger = deps.schedulerLogger ?? consoleSchedulerLogger();
+
+  // Build the production `makeEngineerRunner` only when the caller did
+  // not supply one. The caller-supplied factory wins verbatim per the
+  // `cli-start` capability spec; the e2e smoke test's precheck-skip
+  // stub continues to short-circuit before any registry lookup runs.
+  const mergedRegistry: Readonly<Record<string, CodingAgentCliEntry>> = {
+    ...codingAgentCliRegistry,
+    ...(deps.codingAgentCliRegistryOverride ?? {}),
+  };
+  const productionMakeEngineerRunner = deps.makeEngineerRunner ??
+    buildProductionEngineerRunnerFactory({
+      resolvedConfig: loaded.resolvedConfig,
+      registry: mergedRegistry,
+      mcpEntryPath: MCP_ENTRY_PATH,
+      makeActivityHttpClient: (
+        serverUrl: string,
+        agentId: string,
+      ): EngineerActivityHttpClient => createMcpHttpClient({ serverUrl, agentId }),
+      logger: schedulerLogger,
+    });
+
   const runServerDeps: RunServerDeps = {
     out: (line) => io.out(line),
     err: (line) => io.err(line),
     homeDir,
     initiallyPausedAgents,
     pausedAgentsPersister,
+    schedulerLogger,
     startServerOverride: async (serverDeps, serverOpts) => {
       const handle = await startServerOverride(serverDeps, serverOpts);
       tap.serverHandle = handle;
@@ -307,9 +367,7 @@ export async function runStart(
       tap.scheduler = scheduler;
     },
     ...(spa.mode === "bundled" ? { staticAssetsRoot: spa.root } : {}),
-    ...(deps.makeEngineerRunner !== undefined
-      ? { makeEngineerRunner: deps.makeEngineerRunner }
-      : {}),
+    makeEngineerRunner: productionMakeEngineerRunner,
     ...(deps.workspaceProvisioner !== undefined
       ? { workspaceProvisioner: deps.workspaceProvisioner }
       : {}),

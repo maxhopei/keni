@@ -41,6 +41,9 @@ export type {
 export { createSubprocessCodingAgentInvoker } from "./common/codingAgentInvoker.ts";
 export type { SubprocessCodingAgentInvokerOpts } from "./common/codingAgentInvoker.ts";
 
+export { codingAgentCliRegistry, isKnownCli } from "./common/codingAgentCliRegistry.ts";
+export type { CodingAgentCliEntry, KnownCli } from "./common/codingAgentCliRegistry.ts";
+
 export { resolveBundledPrompt } from "./common/promptResolver.ts";
 
 export { RoleRuntimeError, RoleRuntimeHttpError } from "./common/types.ts";

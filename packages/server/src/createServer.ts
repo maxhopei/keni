@@ -187,23 +187,35 @@ export function createServer(
   app.use(requestId());
   app.use(requestLog(deps.logSink, opts.projectId));
 
-  app.route(
-    "/health",
-    healthRoute(opts.projectId, () => deps.serverStartedAt),
-  );
+  // `/health` is the only documented exemption from the role guard:
+  // its sub-app is registered BEFORE `roleIdentity` so the supervisor
+  // probe is unauthenticated. The dual-mount loop below mirrors every
+  // REST and WS group under `/api/<x>`; we apply the same dual-mount
+  // here while preserving the pre-`roleIdentity` registration position.
+  const healthApp = healthRoute(opts.projectId, () => deps.serverStartedAt);
+  app.route("/health", healthApp);
+  app.route("/api/health", healthApp);
 
   // When a static SPA bundle is mounted, exempt non-REST GET requests
   // from the role guard so browsers can fetch `/`, `/assets/*`, and
   // any deep-link fallthrough without setting `X-Keni-Role`. The
   // exemption applies ONLY to GET requests whose path is not in the
-  // closed `REST_PREFIXES` allowlist; every REST endpoint still
-  // requires the header verbatim. The `cli-start-and-end-to-end-wiring`
-  // change introduces this carve-out (see the static-SPA delta on the
-  // `orchestration-server` capability spec).
+  // closed `REST_PREFIXES` allowlist; every REST endpoint (including
+  // every `/api/<x>` mirror) still requires the header verbatim because
+  // `/api` is in the allowlist. The `cli-start-and-end-to-end-wiring`
+  // change introduced this carve-out; the `spa-api-prefix-alias` change
+  // tightened the allowlist to cover the `/api` mirror surface.
   const spaMounted = deps.staticAssetsRoot !== undefined;
   app.use(
     roleIdentity({
-      fallback: (c) => c.req.path === "/events" ? c.req.query("role") : undefined,
+      // The `?role=` query-parameter fallback fires on the WS upgrade
+      // path only. It must match BOTH the bare `/events` URL and its
+      // `/api/events` mirror so SPA clients connecting same-origin via
+      // either form get the upgrade through.
+      fallback: (c) => {
+        const path = c.req.path;
+        return (path === "/events" || path === "/api/events") ? c.req.query("role") : undefined;
+      },
       ...(spaMounted
         ? {
           exempt: (c) => c.req.method === "GET" && !isRestPrefixed(c.req.path),
@@ -225,10 +237,13 @@ export function createServer(
     return c.json(body, 404);
   });
 
-  app.route(
-    "/tickets",
-    ticketsRoutes(deps.ticketStore, deps.eventBus, opts.projectId),
-  );
+  // Build each route group's sub-app exactly once. Each factory captures
+  // its dependencies by closure; mounting the same sub-app at two base
+  // paths (the bare prefix and its `/api/<x>` mirror) registers the
+  // same handlers under both URL forms in the parent's route table —
+  // a single round-trip per request, a single emitted `EventFrame` per
+  // mutation, and no duplicated work at startup.
+  const ticketsApp = ticketsRoutes(deps.ticketStore, deps.eventBus, opts.projectId);
   const mergeDeps = deps.workspaceProvisioner && deps.projectRepoPath
     ? {
       activityLogStore: deps.activityLogStore,
@@ -239,32 +254,50 @@ export function createServer(
       gitBinary: deps.gitBinary,
     }
     : undefined;
-  app.route(
-    "/prs",
-    prsRoutes(deps.prStore, deps.eventBus, opts.projectId, mergeDeps),
+  const prsApp = prsRoutes(deps.prStore, deps.eventBus, opts.projectId, mergeDeps);
+  const activityApp = activityRoutes(
+    deps.activityLogStore,
+    deps.agentRuntimeStateStore,
+    deps.eventBus,
+    opts.projectId,
   );
-  app.route(
-    "/activity",
-    activityRoutes(
-      deps.activityLogStore,
-      deps.agentRuntimeStateStore,
-      deps.eventBus,
-      opts.projectId,
-    ),
+  const agentsApp = agentsRoutes(
+    deps.agentRuntimeStateStore,
+    deps.eventBus,
+    opts.projectId,
+    deps.getScheduler,
+    deps.pausedAgentsPersister,
+    deps.logSink,
   );
-  app.route(
-    "/agents",
-    agentsRoutes(
-      deps.agentRuntimeStateStore,
-      deps.eventBus,
-      opts.projectId,
-      deps.getScheduler,
-      deps.pausedAgentsPersister,
-      deps.logSink,
-    ),
-  );
-  app.route("/events", eventsRoute(deps.eventBus));
+  const eventsApp = eventsRoute(deps.eventBus);
 
+  // The bare prefix is the canonical wire for non-browser callers
+  // (`curl`, the engineer MCP server's `httpClient`, the role-runtime's
+  // `activityClient`). The `/api/<x>` mirror is the same handler under
+  // a SPA-friendly same-origin path; the SPA's `apiClient` hardcodes
+  // these because the dev-mode wire goes through a Vite proxy that
+  // strips `/api`. Both URL forms hit the same handler — see the
+  // `orchestration-server` capability spec's "Every REST and WS route
+  // is reachable under both `/<x>` and `/api/<x>`" requirement. Adding
+  // a future REST group is a one-line addition to this array.
+  const routeGroups: ReadonlyArray<readonly [string, Hono<{ Variables: ServerVariables }>]> = [
+    ["/tickets", ticketsApp],
+    ["/prs", prsApp],
+    ["/activity", activityApp],
+    ["/agents", agentsApp],
+    ["/events", eventsApp],
+  ];
+  for (const [bareBasePath, subApp] of routeGroups) {
+    app.route(bareBasePath, subApp);
+    app.route(`/api${bareBasePath}`, subApp);
+  }
+
+  // Static SPA route group MUST be mounted AFTER every REST/WS route
+  // (both bare-prefix and `/api/<x>` mirror) so REST endpoints win
+  // over the SPA fallthrough. The fallthrough consults `REST_PREFIXES`
+  // (which includes `/api`) so any unmatched GET under `/api/<typo>`
+  // returns the documented 404 envelope instead of the bundle's
+  // `index.html`.
   if (deps.staticAssetsRoot !== undefined) {
     mountStaticSpa(app, { staticAssetsRoot: deps.staticAssetsRoot });
   }

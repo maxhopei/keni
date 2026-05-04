@@ -25,7 +25,9 @@ export { startServer } from "./startServer.ts";
 export type { StartedServer, StartServerOptions } from "./startServer.ts";
 
 export { parseRunServerArgs, runServer, UsageError } from "./runServer.ts";
-export type { RunServerArgs, RunServerDeps } from "./runServer.ts";
+export type { MakeEngineerRunnerInput, RunServerArgs, RunServerDeps } from "./runServer.ts";
+
+export type { AgentRunner, AgentRunnerRegistry } from "./scheduler/registry.ts";
 
 export {
   captureLogSink,
@@ -60,8 +62,14 @@ export type { MountStaticSpaOptions } from "./routes/static.ts";
 
 export type { InterruptResult, Scheduler } from "./scheduler/scheduler.ts";
 
+export { captureSchedulerLogger, consoleSchedulerLogger } from "./scheduler/log.ts";
+export type { SchedulerLogEntry, SchedulerLogger, SchedulerLogLevel } from "./scheduler/log.ts";
+
 export { createMcpServer, McpHttpError, runMcpServer } from "./mcp/main.ts";
+export { createMcpHttpClient } from "./mcp/main.ts";
 export type { McpHttpClient, McpServerDeps } from "./mcp/main.ts";
+
+export { MCP_ENTRY_PATH } from "./mcpEntryPath.ts";
 
 if (import.meta.main) {
   const { runServer } = await import("./runServer.ts");

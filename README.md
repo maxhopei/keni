@@ -173,6 +173,19 @@ curl -H "X-Keni-Role: user" http://127.0.0.1:<port>/tickets
 # => { "data": [], "project_id": "<uuid>" }
 ```
 
+**Same-origin `/api/*` alias.** Every REST and WebSocket endpoint is reachable under two equivalent
+URL forms: the canonical bare path (e.g. `/tickets`) and an `/api/`-prefixed mirror (e.g.
+`/api/tickets`). Both URLs hit the same handler, the same store, and the same event bus —
+`curl -H
+"X-Keni-Role: user" http://127.0.0.1:<port>/api/tickets` returns the same
+`TicketListResponse` as the bare-prefix call above. The prefixed form exists so the SPA's
+`apiClient` (which hardcodes `/api/...` URLs because the dev-mode wire goes through a Vite proxy
+that strips the prefix) reaches the REST surface in production-mode `keni start`, where the
+orchestration server hosts both the bundled SPA and the API on a single same-origin loopback port.
+Non-browser callers (this `curl`, the engineer MCP server's `httpClient`, the role-runtime's
+`activityClient`) keep using the bare prefix; the spec contract for the alias lives in the
+`orchestration-server` capability spec.
+
 The agent roster joined to runtime state is at `GET /agents`:
 
 ```bash
@@ -214,6 +227,65 @@ forward-compatible additive change documented in the capability spec).
 The full HTTP contract — endpoints, wire shapes, error envelope, role rules, agent roster, event
 taxonomy, and WS lifecycle — lives in the
 [`orchestration-server` capability spec](./openspec/changes/agents-api-and-websocket/specs/orchestration-server/spec.md).
+
+### Configure the coding-agent CLI
+
+`keni start` runs an in-process scheduler that ticks each engineer agent on its configured cadence;
+on every tick it spawns the configured coding-agent CLI as a child process and pipes the engineer
+prompt to it. Until the CLI is configured, the scheduler logs one `engineer.runner_skipped` warn
+line per engineer agent at boot and `runner.missing` on every subsequent tick — i.e. tickets stay
+open and nothing happens.
+
+Configure the CLI globally for every project by writing `~/.keni/config.yaml`:
+
+```yaml
+coding_agent_cli: claude
+```
+
+Or override it per agent in `<project>/.keni/project.yaml` (per-agent wins over global):
+
+```yaml
+project_id: 11111111-2222-3333-4444-555555555555
+name: my-project
+agents:
+  - id: alice
+    role: engineer
+    cli: claude
+  - id: bob
+    role: engineer
+    cli: cursor-agent
+```
+
+The closed list of supported CLI names lives in
+[`packages/role-runtimes/src/common/codingAgentCliRegistry.ts`](./packages/role-runtimes/src/common/codingAgentCliRegistry.ts):
+
+| Name           | Coverage    | Notes                                                                                              |
+| -------------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| `claude`       | tested      | Anthropic's Claude Code CLI. Argv shape unit-tested against the documented `--print --mcp-config`. |
+| `cursor-agent` | best-effort | Cursor's headless agent CLI. Modelled against the documented contract; no integration test yet.    |
+| `codex`        | best-effort | OpenAI's Codex CLI. Modelled against the documented `exec` subcommand; no integration test yet.    |
+
+When the resolved CLI is missing or unknown, `keni start` emits a single `warn`-level
+`engineer.runner_skipped` line per agent at boot — for example:
+
+```jsonc
+{
+  "level": "warn",
+  "event": "engineer.runner_skipped",
+  "agent": "alice",
+  "reason": "no_cli_configured",
+  "configured_cli": null,
+  "supported": ["claude", "codex", "cursor-agent"]
+}
+```
+
+For the `unknown_cli` case (a typo or an unregistered name), `configured_cli` carries the value that
+did not resolve and `supported` lists the closed registry keys. Adding a new CLI is a deliberate
+code change — see the entries already in `codingAgentCliRegistry.ts`.
+
+The full wiring contract — resolution order, log shape, opt-out semantics — lives in the
+[`cli-start` capability spec](./openspec/specs/cli-start/spec.md) and the
+[`engineer-runtime` capability spec](./openspec/specs/engineer-runtime/spec.md).
 
 ### Run the engineer MCP server (development only)
 
@@ -447,7 +519,10 @@ KENI_SERVER_URL=http://127.0.0.1:<bound-port> deno task dev
 
 In production mode, [`keni start`](#quickstart-with-keni-start) hosts the built `packages/spa/dist/`
 bundle from the orchestration server itself, so the dev-server proxy above is only required during
-local SPA development.
+local SPA development. Production-mode `keni start` does not need any proxy because the
+orchestration server mounts every REST and WS endpoint under both the bare path (e.g. `/tickets`)
+and an `/api/`-prefixed mirror (e.g. `/api/tickets`) — the same `apiClient` URLs that work in dev
+work in production same-origin (see "Run the orchestration server" above for the contract).
 
 The SPA mounts four routes inside the app shell:
 
