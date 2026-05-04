@@ -39,6 +39,7 @@ import {
   formatUsageError,
 } from "./init/messages.ts";
 import { parseInitArgs, runInit } from "./init/mod.ts";
+import { parseStartArgs, runStart } from "./start/mod.ts";
 
 /** Re-export so consumers can still import the package name. */
 export const packageName = "@keni/cli";
@@ -72,6 +73,10 @@ export async function runDispatcher(
       case "init": {
         const opts = parseInitArgs(rest);
         return await runInit(opts, { out, err });
+      }
+      case "start": {
+        const startArgs = parseStartArgs(rest);
+        return await runStart(startArgs, { out, err });
       }
       default:
         err(formatUsageError(`unknown subcommand: ${subcommand}`));

@@ -38,6 +38,7 @@ import type {
 } from "@keni/shared";
 import { resolve } from "@std/path";
 import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
+import type { ServerDeps } from "./createServer.ts";
 import { createInMemoryEventBus } from "./eventBus.ts";
 import { createMutex, type Mutex } from "./concurrency/mutex.ts";
 import { stdoutLogSink } from "./middleware/requestLog.ts";
@@ -55,7 +56,7 @@ import {
   type SchedulerDeps,
   type SchedulerOpts,
 } from "./scheduler/scheduler.ts";
-import { startServer } from "./startServer.ts";
+import { type StartedServer, startServer, type StartServerOptions } from "./startServer.ts";
 import {
   GitWorkspaceProvisioner,
   type WorkspaceLogger,
@@ -156,6 +157,37 @@ export interface RunServerDeps {
    * @returns an `AgentRunner` to register, or `null` to skip this engineer.
    */
   readonly makeEngineerRunner?: (input: MakeEngineerRunnerInput) => AgentRunner | null;
+  /**
+   * Optional absolute path to the SPA's production bundle. When supplied,
+   * `runServer` forwards it through `ServerDeps.staticAssetsRoot` so the
+   * orchestration server mounts the static SPA route group. The
+   * `cli-start-and-end-to-end-wiring` change wires this from
+   * `resolveSpaBundle` in `runStart`.
+   */
+  readonly staticAssetsRoot?: string;
+  /**
+   * Optional roster ids whose `paused` flag is `true` at boot. Forwarded
+   * verbatim to {@link createInMemoryAgentRuntimeStateStore}. Wired by
+   * `runStart` from `<projectDir>/.keni/state.json#paused_agents`.
+   */
+  readonly initiallyPausedAgents?: readonly string[];
+  /**
+   * Optional persister called by the `/agents/:id/pause` and
+   * `/agents/:id/resume` route handlers AFTER the `agent.state_changed`
+   * frame is emitted. Wired by `runStart` to `persistPausedAgents`.
+   */
+  readonly pausedAgentsPersister?: (paused: readonly string[]) => Promise<void>;
+  /**
+   * Optional override for `startServer`. The
+   * `cli-start-and-end-to-end-wiring` change uses this to wrap
+   * `startServer` with `bindPortInRange` so port selection happens inside
+   * `runStart` rather than `runServer`. When omitted, the default
+   * `startServer` (single-attempt bind on the resolved port) is used.
+   */
+  readonly startServerOverride?: (
+    deps: ServerDeps,
+    opts: StartServerOptions,
+  ) => Promise<StartedServer>;
 }
 
 /** Input bag handed to {@link RunServerDeps.makeEngineerRunner}. */
@@ -296,7 +328,11 @@ export async function runServer(
 
   const logSink = deps.logSink ?? stdoutLogSink();
   const eventBus = createInMemoryEventBus({ logSink });
-  const agentRuntimeStateStore = createInMemoryAgentRuntimeStateStore(roster);
+  const agentRuntimeStateStore = createInMemoryAgentRuntimeStateStore(roster, {
+    ...(deps.initiallyPausedAgents !== undefined
+      ? { initiallyPaused: deps.initiallyPausedAgents }
+      : {}),
+  });
   const schedulerLogger = deps.schedulerLogger ?? consoleSchedulerLogger();
   const registry = (deps.makeRegistry ?? createAgentRunnerRegistry)(schedulerLogger);
   const provisioner = deps.workspaceProvisioner ??
@@ -314,22 +350,41 @@ export async function runServer(
   let schedulerForRoutes: Scheduler | null = null;
   const getScheduler = () => schedulerForRoutes;
 
-  const serverHandle = await startServer(
-    {
-      ticketStore: stores.ticketStore,
-      prStore: stores.prStore,
-      activityLogStore: stores.activityLogStore,
-      configStore: stores.configStore,
-      logSink,
-      eventBus,
-      agentRuntimeStateStore,
-      workspaceProvisioner: provisioner,
-      projectRepoPath: parsed.projectDir,
-      mergeMutex,
-      getScheduler,
-    },
+  // The deps bag is built up-front so its identity is stable across
+  // (1) the createServer call inside startServer, and (2) the post-bind
+  // `serverStartedAt` mutation below. The `/health` route reads
+  // `serverStartedAt` lazily through a closure that closes over this
+  // very object, so mutating the field after `startServer` resolves
+  // becomes visible to the next request without re-building the app.
+  const serverDeps: ServerDeps = {
+    ticketStore: stores.ticketStore,
+    prStore: stores.prStore,
+    activityLogStore: stores.activityLogStore,
+    configStore: stores.configStore,
+    logSink,
+    eventBus,
+    agentRuntimeStateStore,
+    workspaceProvisioner: provisioner,
+    projectRepoPath: parsed.projectDir,
+    mergeMutex,
+    getScheduler,
+    ...(deps.staticAssetsRoot !== undefined ? { staticAssetsRoot: deps.staticAssetsRoot } : {}),
+    ...(deps.pausedAgentsPersister !== undefined
+      ? { pausedAgentsPersister: deps.pausedAgentsPersister }
+      : {}),
+  };
+
+  const startServerImpl = deps.startServerOverride ?? startServer;
+  const serverHandle = await startServerImpl(
+    serverDeps,
     { projectId, port: parsed.port, host: parsed.host },
   );
+
+  // Mutating `readonly` is intentional and safe: the field is only ever
+  // written here (immediately after `onListen`), every subsequent reader
+  // is a `/health` request observed via the route's closure, and Hono
+  // dispatches requests serially per connection so there is no race.
+  (serverDeps as { serverStartedAt?: Date }).serverStartedAt = new Date();
 
   const engineers = roster.filter((a) => a.role === "engineer");
   if (engineers.length > 0) {

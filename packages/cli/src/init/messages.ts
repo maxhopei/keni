@@ -118,20 +118,19 @@ export function formatUsageError(message: string): string {
 
 /**
  * Top-level help text shown for `--help`, `-h`, or no subcommand.
- *
- * Prototype scope: only `init` is wired. `start` lands in step 13.
  */
 export function formatHelp(): string {
   return [
     "keni — local building agent",
     "",
     "Usage:",
-    "  keni init [path]    Initialise a Keni project in `path` (default: cwd).",
-    "  keni --help         Show this help.",
+    "  keni init  [path]    Initialise a Keni project in `path` (default: cwd).",
+    "  keni start [path]    Boot the orchestration server and serve the SPA",
+    "                       from `path` (default: cwd).",
+    "  keni --help          Show this help.",
     "",
     "Run `keni init` in any folder to create the project's .keni/ directory,",
     "bootstrap ~/.keni/ on first use, and stage an initial git commit.",
-    "",
-    "More subcommands (notably `keni start`) land in later changes.",
+    "Then run `keni start` to launch the local dashboard and the agent loop.",
   ].join("\n");
 }

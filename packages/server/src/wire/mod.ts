@@ -28,6 +28,8 @@ export { ErrorResponseSchema } from "./errors.ts";
 
 export { AgentResponseSchema, AgentStatusSchema } from "./agents.ts";
 
+export { HealthResponseSchema } from "./health.ts";
+
 export {
   ActivityAppendedPayloadSchema,
   AgentStateChangedPayloadSchema,

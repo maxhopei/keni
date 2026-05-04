@@ -112,8 +112,7 @@ Deno.test("formatUsageError — wraps the message with the standard 'Error:' pre
 Deno.test("formatHelp — lists the available subcommands and the prototype init usage", () => {
   const out = formatHelp();
   assert(out.includes("keni init"));
+  assert(out.includes("keni start"));
   assert(out.includes("[path]"));
   assert(out.includes("--help"));
-  // start lands in step 13 — must not falsely advertise it as supported now
-  assert(!out.includes("keni start [path]"));
 });

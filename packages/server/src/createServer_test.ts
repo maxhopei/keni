@@ -60,29 +60,50 @@ function authedRequest(url: string, role = "user"): Request {
   return new Request(url, { headers });
 }
 
-Deno.test("createServer registers middleware in the documented order", async () => {
-  const recorded: string[] = [];
-  const app = new Hono();
-  app.use(async (_c, next) => {
-    recorded.push("requestId");
-    await next();
-  });
-  app.use(async (_c, next) => {
-    recorded.push("requestLog");
-    await next();
-  });
-  app.use(async (_c, next) => {
-    recorded.push("roleIdentity");
-    await next();
-  });
-  app.get("/probe", (c) => c.text("ok"));
-  await app.fetch(new Request("http://x/probe"));
-  assertEquals(recorded, ["requestId", "requestLog", "roleIdentity"]);
+Deno.test(
+  "createServer registers middleware in the documented order with the /health carve-out",
+  async () => {
+    // The expected order around the carve-out:
+    //   requestId → requestLog → /health → roleIdentity → REST routes
+    const recorded: string[] = [];
+    const app = new Hono();
+    app.use(async (_c, next) => {
+      recorded.push("requestId");
+      await next();
+    });
+    app.use(async (_c, next) => {
+      recorded.push("requestLog");
+      await next();
+    });
+    app.use(async (_c, next) => {
+      recorded.push("roleIdentity");
+      await next();
+    });
+    app.get("/probe", (c) => c.text("ok"));
+    await app.fetch(new Request("http://x/probe"));
+    assertEquals(recorded, ["requestId", "requestLog", "roleIdentity"]);
 
+    const deps = makeDeps();
+    const real = createServer(deps, { projectId: PROJECT_ID });
+    const res = await real.fetch(authedRequest("http://x/tickets"));
+    assertEquals(res.status, 200);
+  },
+);
+
+Deno.test("createServer's /health route succeeds without X-Keni-Role", async () => {
   const deps = makeDeps();
-  const real = createServer(deps, { projectId: PROJECT_ID });
-  const res = await real.fetch(authedRequest("http://x/tickets"));
+  const app = createServer(deps, { projectId: PROJECT_ID });
+  // No X-Keni-Role header — the carve-out exempts /health from roleIdentity.
+  const res = await app.fetch(new Request("http://x/health"));
   assertEquals(res.status, 200);
+  const body = (await res.json()) as { data: { status: string }; project_id: string };
+  assertEquals(body.data.status, "ok");
+  assertEquals(body.project_id, PROJECT_ID);
+  // The request-log line for /health carries `role: null` and `agent: null`
+  // because roleIdentity never ran.
+  const healthLine = deps.buffer.find((l) => l.path === "/health");
+  assertEquals(healthLine?.role, null);
+  assertEquals(healthLine?.agent, null);
 });
 
 Deno.test("createServer round-trips GET /tickets against in-memory stores", async () => {

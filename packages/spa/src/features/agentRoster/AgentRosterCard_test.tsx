@@ -164,7 +164,7 @@ describe({
       <AgentRosterCard
         agent={RUNNING_AGENT}
         error={null}
-        interrupting={true}
+        interrupting
         onTogglePause={onTogglePause}
         onInterrupt={onInterrupt}
       />,

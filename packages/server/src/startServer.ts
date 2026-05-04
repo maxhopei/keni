@@ -40,6 +40,12 @@ export interface StartedServer {
 /**
  * Bind the composed Hono app and return a handle. The default host is
  * `127.0.0.1`; do not change this — the trust model assumes loopback.
+ *
+ * `deps.serverStartedAt` is captured by the caller (`runServer`) AFTER
+ * `Deno.serve.onListen` fires; this function does NOT mutate the field.
+ * The wall-clock cost of port binding is small but non-zero, so callers
+ * that need an accurate `uptime_ms` for `/health` should pass a thunk
+ * indirection (the `createServer` factory does this via a closure).
  */
 export function startServer(
   deps: ServerDeps,

@@ -31,12 +31,31 @@ export interface RoleIdentityOptions {
    * `MissingRoleError(undefined)` flow.
    */
   readonly fallback?: (c: Context<{ Variables: ServerVariables }>) => string | undefined;
+  /**
+   * Predicate consulted BEFORE the header / fallback lookup. When it
+   * returns `true` for a request, the middleware short-circuits with
+   * a no-op (no role assigned, no error thrown) and the downstream
+   * handler runs without a role guard. The
+   * `cli-start-and-end-to-end-wiring` change wires this so the static
+   * SPA route group (`GET /`, `/assets/*`, and the deep-link
+   * fallthrough) serves browsers that cannot set the `X-Keni-Role`
+   * header.
+   *
+   * The carve-out applies ONLY when the predicate is supplied and
+   * returns `true` for the specific request; every existing call site
+   * leaves it undefined and the role guard runs verbatim.
+   */
+  readonly exempt?: (c: Context<{ Variables: ServerVariables }>) => boolean;
 }
 
 export function roleIdentity(
   opts: RoleIdentityOptions = {},
 ): MiddlewareHandler<{ Variables: ServerVariables }> {
   return async (c, next) => {
+    if (opts.exempt !== undefined && opts.exempt(c)) {
+      await next();
+      return;
+    }
     let raw = c.req.header("X-Keni-Role");
     if (raw === undefined && opts.fallback !== undefined) {
       raw = opts.fallback(c);

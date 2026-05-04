@@ -113,14 +113,38 @@ const IDLE_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Optional seed for {@link createInMemoryAgentRuntimeStateStore}. The
+ * `cli-start-and-end-to-end-wiring` change wires
+ * `<projectDir>/.keni/state.json#paused_agents` into this seed so a
+ * server restart honours the user's last pause selection per the
+ * `cli-start` capability spec.
+ */
+export interface InMemoryAgentRuntimeStateStoreOptions {
+  /**
+   * Agent ids whose `paused` flag is set to `true` at boot. Ids not in
+   * the roster are silently dropped (the `runStart` boot flow already
+   * warn-logs them; this constructor MUST tolerate them so a stale
+   * `state.json` does not crash the server).
+   */
+  readonly initiallyPaused?: readonly string[];
+}
+
+/**
  * Build the in-memory `AgentRuntimeStateStore` seeded from the project
  * config's `agents:` list. Each entry starts `paused: false`,
  * `status: "idle"`, `last_activity: null`, `last_active_at: null`. The
  * order of `list()` matches the YAML declaration order.
+ *
+ * The optional `initiallyPaused` seed flips `paused: true` for any
+ * roster entry whose id appears in the array (ids not in the roster
+ * are silently ignored — the caller is responsible for warn-logging
+ * dropped ids before the call, per the `cli-start` capability).
  */
 export function createInMemoryAgentRuntimeStateStore(
   roster: readonly AgentConfig[],
+  opts: InMemoryAgentRuntimeStateStoreOptions = {},
 ): AgentRuntimeStateStore {
+  const initiallyPaused = new Set(opts.initiallyPaused ?? []);
   const order: string[] = [];
   const states = new Map<string, AgentRuntimeState>();
   for (const cfg of roster) {
@@ -132,7 +156,7 @@ export function createInMemoryAgentRuntimeStateStore(
       status: "idle",
       last_activity: null,
       last_active_at: null,
-      paused: false,
+      paused: initiallyPaused.has(cfg.id),
     });
   }
 

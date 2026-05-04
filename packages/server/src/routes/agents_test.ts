@@ -21,11 +21,12 @@ import {
 } from "../agentState.ts";
 import { captureBusBuffer, createInMemoryEventBus, emitFrame } from "../eventBus.ts";
 import { errorBoundary } from "../middleware/errorBoundary.ts";
+import { captureLogSink } from "../middleware/requestLog.ts";
 import { roleIdentity } from "../middleware/roleIdentity.ts";
-import type { ServerVariables } from "../middleware/types.ts";
+import type { RequestLogLine, ServerVariables } from "../middleware/types.ts";
 import type { InterruptResult, Scheduler } from "../scheduler/scheduler.ts";
 import type { AgentRunner } from "../scheduler/registry.ts";
-import { agentsRoutes } from "./agents.ts";
+import { agentsRoutes, type PausedAgentsPersister } from "./agents.ts";
 
 const PROJECT_ID = "project-test";
 
@@ -478,6 +479,91 @@ Deno.test("POST /:id/interrupt on an unconfigured server → 500 internal_error"
   const errBody = (await res.json()) as ErrorResponse;
   assertEquals(errBody.error.code, "internal_error");
 });
+
+// ---------------------------------------------------------------------------
+// `pausedAgentsPersister` — `cli-start-and-end-to-end-wiring` change
+// ---------------------------------------------------------------------------
+
+interface PersistContext {
+  readonly app: Hono<{ Variables: ServerVariables }>;
+  readonly buffer: EventFrame[];
+  readonly logBuffer: RequestLogLine[];
+  readonly persistedSnapshots: readonly string[][];
+}
+
+function makeTestAppWithPersister(
+  roster: readonly AgentConfig[],
+  persister: PausedAgentsPersister,
+): PersistContext {
+  const store = createInMemoryAgentRuntimeStateStore(roster);
+  const bus = createInMemoryEventBus();
+  const { buffer, subscribe } = captureBusBuffer();
+  subscribe(bus);
+  const logBuffer: RequestLogLine[] = [];
+  const logSink = captureLogSink(logBuffer);
+  const persistedSnapshots: string[][] = [];
+  const wrappedPersister: PausedAgentsPersister = async (paused) => {
+    persistedSnapshots.push([...paused]);
+    await persister(paused);
+  };
+  const app = new Hono<{ Variables: ServerVariables }>();
+  app.use(roleIdentity());
+  app.onError(errorBoundary(PROJECT_ID));
+  app.route(
+    "/agents",
+    agentsRoutes(store, bus, PROJECT_ID, undefined, wrappedPersister, logSink),
+  );
+  return { app, buffer, logBuffer, persistedSnapshots };
+}
+
+Deno.test(
+  "POST /agents/:id/pause invokes pausedAgentsPersister with the post-call snapshot",
+  async () => {
+    const ctx = makeTestAppWithPersister(ROSTER, () => Promise.resolve());
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/agents/alice/pause", { method: "POST", role: "user" }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(ctx.persistedSnapshots, [["alice"]]);
+    // The agent.state_changed frame fires BEFORE the persist call.
+    assertEquals(ctx.buffer.length, 1);
+    assertEquals(ctx.buffer[0]!.event, "agent.state_changed");
+  },
+);
+
+Deno.test(
+  "POST /agents/:id/pause: persister rejection still returns 200 and warn-logs",
+  async () => {
+    const ctx = makeTestAppWithPersister(ROSTER, () => {
+      return Promise.reject(new Error("disk full"));
+    });
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/agents/alice/pause", { method: "POST", role: "user" }),
+    );
+    assertEquals(res.status, 200);
+    // The synthetic warn line is captured by the LogSink.
+    const warnLines = ctx.logBuffer.filter((l) =>
+      typeof l.error_code === "string" && l.error_code.startsWith("paused_agents_persist_failed")
+    );
+    assertEquals(warnLines.length, 1);
+    assert(warnLines[0]!.error_code!.includes("disk full"));
+  },
+);
+
+Deno.test(
+  "POST /agents/:id/pause without a persister: no extra log lines are produced",
+  async () => {
+    // Build the app WITHOUT the persister deps — the existing
+    // makeTestApp helper already does this; verify there's no
+    // synthetic warn line and only the standard frame fires.
+    const ctx = makeTestApp(ROSTER);
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/agents/alice/pause", { method: "POST", role: "user" }),
+    );
+    assertEquals(res.status, 200);
+    assertEquals(ctx.buffer.length, 1);
+  },
+);
 
 Deno.test("Interrupt route exists alongside pause/resume on the same router", async () => {
   // Confirms that the four POST verbs (pause, resume, interrupt) and

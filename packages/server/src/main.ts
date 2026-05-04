@@ -42,7 +42,23 @@ export { captureBusBuffer, createInMemoryEventBus, emitFrame } from "./eventBus.
 export type { EventBus, EventBusHandler } from "./eventBus.ts";
 
 export { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
-export type { AgentRuntimeState, AgentRuntimeStateStore } from "./agentState.ts";
+export type {
+  AgentRuntimeState,
+  AgentRuntimeStateStore,
+  InMemoryAgentRuntimeStateStoreOptions,
+} from "./agentState.ts";
+
+export { isRestPrefixed, REST_PREFIXES } from "./restPrefixes.ts";
+export type { RestPrefix } from "./restPrefixes.ts";
+
+export {
+  mountStaticSpa,
+  StaticAssetsRootInvalid,
+  validateStaticAssetsRoot,
+} from "./routes/static.ts";
+export type { MountStaticSpaOptions } from "./routes/static.ts";
+
+export type { InterruptResult, Scheduler } from "./scheduler/scheduler.ts";
 
 export { createMcpServer, McpHttpError, runMcpServer } from "./mcp/main.ts";
 export type { McpHttpClient, McpServerDeps } from "./mcp/main.ts";

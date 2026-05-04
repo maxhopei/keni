@@ -46,8 +46,16 @@ import type { AgentEnvelope, AgentListResponse, AgentResponse, Role } from "@ken
 import type { AgentRuntimeState, AgentRuntimeStateStore } from "../agentState.ts";
 import { RoleNotOwnerError } from "../errors.ts";
 import { emitFrame, type EventBus } from "../eventBus.ts";
-import type { ServerVariables } from "../middleware/types.ts";
+import type { LogSink, ServerVariables } from "../middleware/types.ts";
 import type { Scheduler } from "../scheduler/scheduler.ts";
+
+/**
+ * Persister called from the pause/resume handlers AFTER `agent.state_changed`
+ * fires, only when the call actually flipped (`changed: true`). The
+ * orchestration server warn-logs and proceeds on rejection so a transient
+ * `state.json` write failure never blocks the user.
+ */
+export type PausedAgentsPersister = (paused: readonly string[]) => Promise<void>;
 
 /** Roles authorised to call `POST /:id/pause` / `resume` / `interrupt`. User-only by spec. */
 const AGENT_CONTROL_OWNERS: readonly Role[] = ["user"];
@@ -67,6 +75,8 @@ export function agentsRoutes(
   bus: EventBus,
   projectId: string,
   getScheduler?: SchedulerProvider,
+  pausedAgentsPersister?: PausedAgentsPersister,
+  logSink?: LogSink,
 ): Hono<{ Variables: ServerVariables }> {
   const app = new Hono<{ Variables: ServerVariables }>();
 
@@ -78,19 +88,25 @@ export function agentsRoutes(
     return c.json(body);
   });
 
-  app.post("/:id/pause", (c) => {
+  app.post("/:id/pause", async (c) => {
     assertRoleCanControlAgent(c.var.role, "pause_agent");
     const id = c.req.param("id");
     const { state, changed } = store.setPaused(id, true);
-    if (changed) emitAgentStateChanged(bus, projectId, state);
+    if (changed) {
+      emitAgentStateChanged(bus, projectId, state);
+      await persistPausedSnapshot(store, pausedAgentsPersister, logSink, c.var.request_id);
+    }
     return c.json(toAgentEnvelope(state, projectId));
   });
 
-  app.post("/:id/resume", (c) => {
+  app.post("/:id/resume", async (c) => {
     assertRoleCanControlAgent(c.var.role, "resume_agent");
     const id = c.req.param("id");
     const { state, changed } = store.setPaused(id, false);
-    if (changed) emitAgentStateChanged(bus, projectId, state);
+    if (changed) {
+      emitAgentStateChanged(bus, projectId, state);
+      await persistPausedSnapshot(store, pausedAgentsPersister, logSink, c.var.request_id);
+    }
     return c.json(toAgentEnvelope(state, projectId));
   });
 
@@ -162,4 +178,44 @@ function toAgentResponse(state: AgentRuntimeState): AgentResponse {
 
 function toAgentEnvelope(state: AgentRuntimeState, projectId: string): AgentEnvelope {
   return { data: toAgentResponse(state), project_id: projectId };
+}
+
+/**
+ * Snapshot the currently-paused agent ids and forward to the persister.
+ * Rejection is logged (best-effort via the request-log sink as a synthetic
+ * line) and DOES NOT fail the request — `state.json` is a recovery seam,
+ * not a transactional store.
+ *
+ * The synthetic log line uses the existing `LogSink` shape so operators
+ * see the failure on the same JSONL stream as request logs. When
+ * `logSink` is omitted (existing test call sites that did not opt in),
+ * the rejection is silently swallowed.
+ */
+async function persistPausedSnapshot(
+  store: AgentRuntimeStateStore,
+  persister: PausedAgentsPersister | undefined,
+  logSink: LogSink | undefined,
+  requestId: string | undefined,
+): Promise<void> {
+  if (persister === undefined) return;
+  const paused = store.list().filter((a) => a.paused).map((a) => a.id);
+  try {
+    await persister(paused);
+  } catch (e) {
+    if (logSink !== undefined) {
+      const reason = e instanceof Error ? e.message : String(e);
+      await logSink.write({
+        request_id: requestId ?? "",
+        timestamp: new Date().toISOString(),
+        method: "INTERNAL",
+        path: "/agents/pause-persister",
+        status: 0,
+        duration_ms: 0,
+        role: null,
+        agent: null,
+        project_id: "",
+        error_code: `paused_agents_persist_failed: ${reason}`,
+      });
+    }
+  }
 }

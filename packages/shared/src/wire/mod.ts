@@ -64,3 +64,5 @@ export type {
   TicketUpdatedPayload,
 } from "./events.ts";
 export { EVENT_NAMES, isEventName } from "./events.ts";
+
+export type { HealthEnvelope, HealthResponse } from "./health.ts";

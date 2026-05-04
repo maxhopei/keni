@@ -33,8 +33,23 @@ Deno.test("runDispatcher: --help returns exit code 0 and prints usage", async ()
   });
   assertEquals(code, 0);
   assert(out.some((m) => m.includes("keni init")));
+  assert(out.some((m) => m.includes("keni start")), "help text must list `keni start`");
   assertEquals(err, []);
 });
+
+Deno.test(
+  "runDispatcher: start --unknown-flag returns exit code 2 with the usage error",
+  async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runDispatcher(["start", "--unknown-flag"], {
+      out: (m) => out.push(m),
+      err: (m) => err.push(m),
+    });
+    assertEquals(code, 2);
+    assert(err.some((m) => m.includes("Unknown flag")));
+  },
+);
 
 Deno.test("runDispatcher: -h is an alias for --help", async () => {
   const out: string[] = [];

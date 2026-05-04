@@ -77,12 +77,83 @@ git config.
 The on-disk contract is formalised in the
 [`project-layout` capability spec](./openspec/changes/project-and-global-layout-with-init/specs/project-layout/spec.md)
 (active until archived). Once archived, the canonical reference moves to
-[`openspec/specs/project-layout/spec.md`](./openspec/specs/).
+[`openspec/specs/project-layout/spec.md`](./openspec/specs/). Once the project is initialised, the
+canonical next step is the [Quickstart with `keni start`](#quickstart-with-keni-start) below.
+
+### Quickstart with `keni start`
+
+`keni start` is the user-facing entry point that boots the orchestration server, serves the SPA
+bundle, and manages the graceful shutdown sequence in a single command. It is the right command for
+anyone running Keni for the first time; the lower-level "Run the orchestration server" subsection
+below is for contributors who need to drive `runServer` directly during development.
+
+**Prerequisites.** A `keni init`-produced project (see
+[Initialise a Keni project (`keni init`)](#initialise-a-keni-project-keni-init) above), and a
+production SPA bundle on disk (`deno task build` from the workspace root — `keni start` serves
+`packages/spa/dist/` from the orchestration server in production mode and refuses to boot if the
+bundle is missing).
+
+```bash
+deno task build
+deno run -A packages/cli/src/main.ts start [path]
+```
+
+`path` defaults to the current working directory; pass an absolute path to boot against a project
+elsewhere. During the prototype the `keni` binary is not yet packaged — every invocation goes
+through `deno run`. A future packaged binary will provide `keni start` directly.
+
+On a successful boot, the command prints exactly one line to stdout:
+
+```
+Keni server running at http://127.0.0.1:<port>
+```
+
+The line's format is **byte-for-byte stable** per the
+[`cli-start` capability spec](./openspec/changes/cli-start-and-end-to-end-wiring/specs/cli-start/spec.md)
+(or, after archive, [`./openspec/specs/cli-start/spec.md`](./openspec/specs/)) — supervisors, log
+parsers, and the smoke-test runbook all match against it. Open the printed URL in a browser to load
+the SPA dashboard.
+
+**Configuration seams.** Two layered files configure `keni start`:
+
+- `<projectDir>/.env` is parsed (one `KEY=value` per line; `#`-prefix and blank lines are ignored;
+  surrounding double quotes are stripped) and overlaid onto `Deno.env`. The **calling shell wins**:
+  any variable already set in the shell is left untouched. Multiline values and `${VAR}`
+  interpolation are NOT supported by design.
+- `~/.keni/config.yaml` provides defaults that the project's `.keni/project.yaml` overrides per
+  top-level key (top-level keys are replaced wholesale, not deep-merged). When the global file is
+  absent it is treated as `{}` and the documented defaults apply.
+
+**Port selection.** The default port range is `7777..7787` (inclusive); the binder walks the range
+and picks the first free port. Override with `--port-range <start>-<end>` to widen / narrow the
+range, or with `--port <n>` to pin a single port (which disables the fallback walk). Override the
+bind host with `--host <h>` (default `127.0.0.1`).
+
+**Graceful shutdown.** The first `SIGINT` or `SIGTERM` runs the documented sequence in this order:
+stop the scheduler (no further ticks fire), interrupt every running agent in series, wait up to the
+configured grace window (default `2_000` ms, hard-capped at `10_000` ms), then abort the HTTP
+listener. The exit code is `0`. A second `SIGINT` / `SIGTERM` short-circuits the sequence and forces
+exit `130` (the conventional "killed by SIGINT" code) — use it when the grace window is too long for
+your situation.
+
+The full contract — every flag, every exit code, the error envelope, the layered-config ordering
+rule, and the per-error mapping — lives in the
+[`cli-start` capability spec](./openspec/changes/cli-start-and-end-to-end-wiring/specs/cli-start/spec.md).
 
 ### Run the orchestration server
 
 `@keni/server` is the local HTTP service the SPA, role runtimes, and (later) the MCP layer talk to.
-During the prototype it has no `keni start` wrapper yet — invoke it directly with `deno run`:
+The user-facing entry point is [`keni start`](#quickstart-with-keni-start), which boots the server,
+serves the SPA bundle, and manages graceful shutdown in one command. The direct invocation below is
+preserved for contributors who need to drive `runServer` itself during development.
+
+The orchestration server exposes an unauthenticated `GET /health` endpoint (the only documented
+exemption from the role-identity middleware) that returns
+`{ data: { status: "ok", project_id, uptime_ms, version }, project_id }`; the full contract lives in
+the
+[`orchestration-server` capability spec](./openspec/changes/cli-start-and-end-to-end-wiring/specs/orchestration-server/spec.md).
+
+#### Direct invocation (development)
 
 ```bash
 deno run -A packages/server/src/main.ts --project /absolute/path/to/keni-project --port 0
@@ -139,10 +210,6 @@ in-memory.** Pause / resume flags, agent runtime status, and the event bus all r
 restart; the activity log on disk remains the durable record. Reconnect strategy: the client
 re-fetches the canonical state from REST on each reconnect (`?since=<event-id>` replay is a
 forward-compatible additive change documented in the capability spec).
-
-Step 13 (`cli-start-and-end-to-end-wiring`) folds this invocation into a `keni start` subcommand
-that handles signal management, `~/.keni/logs/server-YYYY-MM-DD.jsonl` log routing, and (later)
-process supervision; `runServer` is already the dispatch target so that change is one line.
 
 The full HTTP contract — endpoints, wire shapes, error envelope, role rules, agent roster, event
 taxonomy, and WS lifecycle — lives in the
@@ -378,8 +445,9 @@ server, take the port the server prints to stdout and run:
 KENI_SERVER_URL=http://127.0.0.1:<bound-port> deno task dev
 ```
 
-Step 13 (`cli-start-and-end-to-end-wiring`) will host the production bundle from the orchestration
-server itself — the dev-server proxy is only required during local SPA development.
+In production mode, [`keni start`](#quickstart-with-keni-start) hosts the built `packages/spa/dist/`
+bundle from the orchestration server itself, so the dev-server proxy above is only required during
+local SPA development.
 
 The SPA mounts four routes inside the app shell:
 
@@ -473,6 +541,46 @@ Every substantive change to Keni ships through
 [OpenSpec](https://github.com/MichaelVeksler/openspec) — propose with `/opsx-propose`, implement
 with `/opsx-apply`, archive with `/opsx-archive`. The active changes live under
 [`openspec/changes/`](./openspec/changes/); archived ones under `openspec/changes/archive/`.
+
+## End-to-end smoke test
+
+The prototype's exit-criterion runbook (`spec.md` §8). On a fresh laptop with the workspace cloned
+and `deno install` already run, the four steps below complete in **under five minutes** end-to-end
+and demonstrate that an engineer agent can drive a user-created ticket through the full status graph
+autonomously.
+
+**Prerequisites.** Deno installed (per [`.tool-versions`](./.tool-versions)), `deno install` run
+once at the workspace root, `deno task build` run to produce `packages/spa/dist/`, and an
+`OPENAI_API_KEY` (or whichever coding-agent's API key your engineer uses) exported in the calling
+shell or written to `<projectDir>/.env` (the file is overlaid onto `Deno.env` with the calling shell
+winning — see [Quickstart with `keni start`](#quickstart-with-keni-start)).
+
+1. **`keni init` an empty folder.** Create a fresh directory anywhere on disk and run
+   `deno run -A packages/cli/src/main.ts init <empty-folder>`. The first run produces
+   `<empty-folder>/.keni/` with the default `alice/engineer` agent and stages a single initial
+   commit.
+2. **`keni start <empty-folder>`.** Run `deno run -A packages/cli/src/main.ts start <empty-folder>`.
+   The command prints exactly one line: `Keni server running at http://127.0.0.1:<port>` (the format
+   is byte-for-byte stable; supervisors and the runbook both match against it).
+3. **Open the printed URL in a browser.** The SPA dashboard loads the empty board, the agent roster
+   on the left lists `alice` as `idle`, and the activity log under `/activity` is empty.
+4. **Create a ticket via the SPA's "New ticket" form** in the leftmost board column. Within a few
+   minutes, the engineer ticks, picks up the ticket, and drives it through the documented lifecycle:
+   `in_progress → ready_for_review → in_review → approved → merged → ready_for_test`. Each
+   transition emits an `activity.appended` frame that the SPA mirrors live; a `pr_merged` row
+   appears on `/activity` once the merge succeeds.
+
+Fire `Ctrl-C` (one `SIGINT`) when you're done — the documented graceful shutdown sequence runs
+(scheduler stop → interrupt running agents → grace window → server abort → exit `0`). A second
+`Ctrl-C` short-circuits to exit `130`.
+
+The automated regression net for the boot path lives at
+[`packages/cli/src/start/start_e2e_test.ts`](./packages/cli/src/start/start_e2e_test.ts) and runs as
+part of `deno task test`. The automated test exercises the boot, `/health`, static-SPA serving, and
+graceful-shutdown wiring against an in-process `runStart` with stub deps — it does **not** drive a
+real engineer subprocess or a real coding agent. The manual runbook above is the user's exit
+criterion (does Keni actually deliver value end-to-end?); the automated test is Keni's own
+regression net (does the boot wiring keep working as we change it?). Both are required.
 
 ## License
 
