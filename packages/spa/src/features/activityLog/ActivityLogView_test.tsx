@@ -554,6 +554,125 @@ describe({
     }
   });
 
+  // ───────── (6.5) terminal-event row variants ─────────
+
+  it("session_interrupted with a ticket ref carries the danger class and the non-revert caption", async () => {
+    const client: ApiClient = {
+      ...unusedApiStubs(),
+      listActivity: () =>
+        Promise.resolve<ActivityQueryResponse>({
+          data: [
+            entry({
+              id: "X1",
+              event: "session_interrupted",
+              refs: { ticket: "ticket-0001" },
+            }),
+          ],
+          project_id: "proj-test",
+        }),
+    };
+    const events = makeFakeEventsClient();
+    renderView({ client, events: events.client });
+    const list = await waitFor(() => screen.getByTestId("activity-list"));
+    const row = list.querySelector("li.keni-activity-log__row");
+    assert(row !== null);
+    assert(
+      row.classList.contains("keni-activity-row--terminal-interrupted"),
+      "row MUST carry the keni-activity-row--terminal-interrupted class",
+    );
+    const note = row.querySelector('[data-testid="activity-row-non-revert-note"]');
+    assert(note !== null, "non-revert caption MUST render when refs.ticket is set");
+    assertEquals(note.textContent, "Ticket status was not auto-reverted.");
+  });
+
+  it("session_timeout with a ticket ref carries the warning class and the non-revert caption", async () => {
+    const client: ApiClient = {
+      ...unusedApiStubs(),
+      listActivity: () =>
+        Promise.resolve<ActivityQueryResponse>({
+          data: [
+            entry({
+              id: "X2",
+              event: "session_timeout",
+              refs: { ticket: "ticket-0042" },
+            }),
+          ],
+          project_id: "proj-test",
+        }),
+    };
+    const events = makeFakeEventsClient();
+    renderView({ client, events: events.client });
+    const list = await waitFor(() => screen.getByTestId("activity-list"));
+    const row = list.querySelector("li.keni-activity-log__row");
+    assert(row !== null);
+    assert(
+      row.classList.contains("keni-activity-row--terminal-timeout"),
+      "row MUST carry the keni-activity-row--terminal-timeout class",
+    );
+    const note = row.querySelector('[data-testid="activity-row-non-revert-note"]');
+    assert(note !== null, "non-revert caption MUST render when refs.ticket is set");
+  });
+
+  it("a terminal-event row WITHOUT refs.ticket does NOT render the non-revert caption", async () => {
+    const client: ApiClient = {
+      ...unusedApiStubs(),
+      listActivity: () =>
+        Promise.resolve<ActivityQueryResponse>({
+          data: [
+            entry({
+              id: "X3",
+              event: "session_interrupted",
+              refs: {},
+            }),
+          ],
+          project_id: "proj-test",
+        }),
+    };
+    const events = makeFakeEventsClient();
+    renderView({ client, events: events.client });
+    const list = await waitFor(() => screen.getByTestId("activity-list"));
+    const row = list.querySelector("li.keni-activity-log__row");
+    assert(row !== null);
+    // Class still applied (the variant is a pure function of event).
+    assert(row.classList.contains("keni-activity-row--terminal-interrupted"));
+    // But the caption MUST be absent because refs.ticket is missing.
+    assertEquals(
+      row.querySelector('[data-testid="activity-row-non-revert-note"]'),
+      null,
+      "caption MUST be omitted when refs.ticket is absent",
+    );
+  });
+
+  it("a non-terminal-event row WITH refs.ticket does NOT render the non-revert caption", async () => {
+    const client: ApiClient = {
+      ...unusedApiStubs(),
+      listActivity: () =>
+        Promise.resolve<ActivityQueryResponse>({
+          data: [
+            entry({
+              id: "X4",
+              event: "ticket_comment",
+              refs: { ticket: "ticket-0001" },
+            }),
+          ],
+          project_id: "proj-test",
+        }),
+    };
+    const events = makeFakeEventsClient();
+    renderView({ client, events: events.client });
+    const list = await waitFor(() => screen.getByTestId("activity-list"));
+    const row = list.querySelector("li.keni-activity-log__row");
+    assert(row !== null);
+    // Neither variant class should be applied.
+    assertEquals(row.classList.contains("keni-activity-row--terminal-interrupted"), false);
+    assertEquals(row.classList.contains("keni-activity-row--terminal-timeout"), false);
+    // And the non-revert caption MUST NOT render.
+    assertEquals(
+      row.querySelector('[data-testid="activity-row-non-revert-note"]'),
+      null,
+    );
+  });
+
   // ───────── (7) unmount cleanup ─────────
 
   it("unmount releases event and lifecycle subscriptions", async () => {

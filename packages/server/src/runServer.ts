@@ -306,6 +306,14 @@ export async function runServer(
     });
   const mergeMutex = deps.mergeMutex ?? createMutex();
 
+  // Cell that the agents-route closure dereferences when the
+  // `POST /agents/:id/interrupt` handler fires. The scheduler is
+  // constructed AFTER `startServer` (it needs the bound server URL),
+  // so this thunk returns `null` during the brief startup window —
+  // see `interrupt-and-timeout-ux` capability.
+  let schedulerForRoutes: Scheduler | null = null;
+  const getScheduler = () => schedulerForRoutes;
+
   const serverHandle = await startServer(
     {
       ticketStore: stores.ticketStore,
@@ -318,6 +326,7 @@ export async function runServer(
       workspaceProvisioner: provisioner,
       projectRepoPath: parsed.projectDir,
       mergeMutex,
+      getScheduler,
     },
     { projectId, port: parsed.port, host: parsed.host },
   );
@@ -364,6 +373,9 @@ export async function runServer(
       projectName,
     },
   );
+  // Wire the scheduler into the agents-route closure now so the
+  // `POST /agents/:id/interrupt` handler can reach it.
+  schedulerForRoutes = scheduler;
   scheduler.start();
   deps.onSchedulerReady?.({ scheduler, registry });
 

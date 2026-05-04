@@ -284,9 +284,27 @@ interface ActivityEntryRowProps {
   readonly entry: ActivityEntryResponse;
 }
 
+/**
+ * Pure mapping from `entry.event` to the row's terminal-event
+ * variant suffix. Returns `null` for non-terminal events. Specced
+ * by the `interrupt-and-timeout-ux` capability — must be a pure
+ * function so subscriber errors elsewhere never affect styling.
+ */
+function terminalEventVariant(event: string): "interrupted" | "timeout" | null {
+  if (event === "session_interrupted") return "interrupted";
+  if (event === "session_timeout") return "timeout";
+  return null;
+}
+
 function ActivityEntryRow({ entry }: ActivityEntryRowProps) {
+  const terminal = terminalEventVariant(entry.event);
+  const rowClass = terminal === null
+    ? "keni-activity-log__row"
+    : `keni-activity-log__row keni-activity-row--terminal-${terminal}`;
+  const showNonRevert = terminal !== null && typeof entry.refs?.ticket === "string" &&
+    entry.refs.ticket !== "";
   return (
-    <li className="keni-activity-log__row" data-testid="activity-row">
+    <li className={rowClass} data-testid="activity-row">
       <span
         className="keni-activity-log__time"
         title={entry.timestamp}
@@ -303,6 +321,16 @@ function ActivityEntryRow({ entry }: ActivityEntryRowProps) {
         {entry.summary === null ? "—" : entry.summary}
       </span>
       <ActivityRefs refs={entry.refs} />
+      {showNonRevert
+        ? (
+          <small
+            className="keni-activity-row__non-revert-note"
+            data-testid="activity-row-non-revert-note"
+          >
+            Ticket status was not auto-reverted.
+          </small>
+        )
+        : null}
     </li>
   );
 }

@@ -173,6 +173,108 @@ Deno.test("a 403 role_not_owner response rejects with KeniApiError carrying the 
   }
 });
 
+Deno.test("interruptAgent issues an empty-body POST /agents/:id/interrupt with the role header", async () => {
+  const data: AgentResponse = {
+    ...ALICE,
+    last_activity: "session_interrupted",
+    last_active_at: "2026-05-04T07:00:00.000Z",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/agents/alice/interrupt": async (request) => {
+        // The route MUST NOT advertise a JSON body when the SPA passes none.
+        assertEquals(request.headers.get("content-type"), null);
+        // Any body is the empty string (no Content-Length implies absence
+        // for a fetch-built Request, but assert the read is empty either way).
+        const body = await request.text();
+        assertEquals(body, "");
+        return jsonResponse({ data, project_id: "proj-1" });
+      },
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl, role: "user" });
+    const result = await client.interruptAgent("alice");
+    assertEquals(result.data.id, "alice");
+    assertEquals(result.data.last_activity, "session_interrupted");
+    const recorded = firstRequest(backend);
+    assertEquals(recorded.method, "POST");
+    assertEquals(recorded.url.pathname, "/api/agents/alice/interrupt");
+    assertEquals(recorded.role, "user");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("interruptAgent on a no-active-cycle 200 resolves with last_activity unchanged", async () => {
+  // Idempotent no-op: server returns 200 with the pre-call snapshot.
+  const idle: AgentResponse = { ...ALICE, last_activity: null };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/agents/alice/interrupt": () => jsonResponse({ data: idle, project_id: "proj-1" }),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const result = await client.interruptAgent("alice");
+    assertEquals(result.data.last_activity, null);
+    assertEquals(result.data.status, "idle");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("interruptAgent rejects with KeniApiError(store_not_found) on 404", async () => {
+  const errorBody: ErrorResponse = {
+    error: { code: "store_not_found", message: "ghost not found" },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/agents/ghost/interrupt": () => jsonResponse(errorBody, 404),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl });
+    const error = await assertRejects(
+      () => client.interruptAgent("ghost"),
+      KeniApiError,
+    );
+    assertEquals(error.status, 404);
+    assertEquals(error.code, "store_not_found");
+  } finally {
+    await backend.close();
+  }
+});
+
+Deno.test("interruptAgent rejects with KeniApiError(role_not_owner) on 403", async () => {
+  const errorBody: ErrorResponse = {
+    error: {
+      code: "role_not_owner",
+      message: "only the user role can interrupt",
+      details: { role: "engineer", target: "interrupt_agent" },
+    },
+    project_id: "proj-1",
+  };
+  const backend = await startMockBackend({
+    routes: {
+      "POST /api/agents/alice/interrupt": () => jsonResponse(errorBody, 403),
+    },
+  });
+  try {
+    const client = createApiClient({ baseUrl: backend.baseUrl, role: "engineer" });
+    const error = await assertRejects(
+      () => client.interruptAgent("alice"),
+      KeniApiError,
+    );
+    assertEquals(error.status, 403);
+    assertEquals(error.code, "role_not_owner");
+    assertEquals((error.details as { target: string } | undefined)?.target, "interrupt_agent");
+  } finally {
+    await backend.close();
+  }
+});
+
 Deno.test("the role header defaults to X-Keni-Role: user", async () => {
   const backend = await startMockBackend({
     routes: {

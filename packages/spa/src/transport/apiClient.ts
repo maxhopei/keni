@@ -73,6 +73,15 @@ export interface ApiClient {
   listAgents(): Promise<AgentListResponse>;
   pauseAgent(id: string): Promise<AgentEnvelope>;
   resumeAgent(id: string): Promise<AgentEnvelope>;
+  /**
+   * Abort the agent's in-flight cycle (`interrupt-and-timeout-ux`
+   * capability). Resolves with the post-call `AgentResponse` on either
+   * a real interrupt or an idempotent no-op (the server returns 200 in
+   * both cases — `design.md` Decision 2). Rejects with `KeniApiError`
+   * for `403 role_not_owner` (non-user roles) or `404 store_not_found`
+   * (unknown agent id).
+   */
+  interruptAgent(id: string): Promise<AgentEnvelope>;
   listTickets(filter?: ListTicketsFilter): Promise<TicketListResponse>;
   getTicket(id: string): Promise<TicketEnvelope>;
   createTicket(input: TicketCreateRequest): Promise<TicketEnvelope>;
@@ -194,6 +203,13 @@ export function createApiClient(opts: CreateApiClientOpts = {}): ApiClient {
 
     async resumeAgent(id: string): Promise<AgentEnvelope> {
       return await request<AgentEnvelope>("POST", `/api/agents/${encodeURIComponent(id)}/resume`);
+    },
+
+    async interruptAgent(id: string): Promise<AgentEnvelope> {
+      return await request<AgentEnvelope>(
+        "POST",
+        `/api/agents/${encodeURIComponent(id)}/interrupt`,
+      );
     },
 
     async listTickets(filter?: ListTicketsFilter): Promise<TicketListResponse> {

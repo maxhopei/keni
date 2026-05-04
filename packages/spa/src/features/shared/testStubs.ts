@@ -96,6 +96,18 @@ export function unusedApiStubs(): SpaApiClient {
         },
         project_id: PROJECT_ID,
       }),
+    interruptAgent: (id) =>
+      Promise.resolve({
+        data: {
+          id,
+          role: "engineer",
+          status: "idle",
+          last_activity: "session_interrupted",
+          last_active_at: "2026-05-04T00:00:00.000Z",
+          paused: false,
+        },
+        project_id: PROJECT_ID,
+      }),
     listTickets: () => Promise.resolve({ data: [], project_id: PROJECT_ID }),
     getTicket: (id): Promise<TicketEnvelope> =>
       Promise.resolve({ data: { ...PLACEHOLDER_TICKET, id }, project_id: PROJECT_ID }),

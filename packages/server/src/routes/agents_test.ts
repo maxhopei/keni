@@ -6,8 +6,9 @@
  */
 
 import { Hono } from "@hono/hono";
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import type {
+  ActivityEntryResponse,
   AgentConfig,
   AgentEnvelope,
   AgentListResponse,
@@ -18,10 +19,12 @@ import {
   type AgentRuntimeStateStore,
   createInMemoryAgentRuntimeStateStore,
 } from "../agentState.ts";
-import { captureBusBuffer, createInMemoryEventBus } from "../eventBus.ts";
+import { captureBusBuffer, createInMemoryEventBus, emitFrame } from "../eventBus.ts";
 import { errorBoundary } from "../middleware/errorBoundary.ts";
 import { roleIdentity } from "../middleware/roleIdentity.ts";
 import type { ServerVariables } from "../middleware/types.ts";
+import type { InterruptResult, Scheduler } from "../scheduler/scheduler.ts";
+import type { AgentRunner } from "../scheduler/registry.ts";
 import { agentsRoutes } from "./agents.ts";
 
 const PROJECT_ID = "project-test";
@@ -30,6 +33,10 @@ interface TestContext {
   readonly app: Hono<{ Variables: ServerVariables }>;
   readonly store: AgentRuntimeStateStore;
   readonly buffer: EventFrame[];
+}
+
+interface TestContextWithScheduler extends TestContext {
+  readonly scheduler: FakeScheduler;
 }
 
 function makeTestApp(roster: readonly AgentConfig[] = []): TestContext {
@@ -42,6 +49,114 @@ function makeTestApp(roster: readonly AgentConfig[] = []): TestContext {
   app.onError(errorBoundary(PROJECT_ID));
   app.route("/agents", agentsRoutes(store, bus, PROJECT_ID));
   return { app, store, buffer };
+}
+
+/**
+ * Build a test app with an injected scheduler-thunk. The fake
+ * scheduler exposes `nextResult` so each test can pin the
+ * discriminated return; on a "happy" interrupt the fake also
+ * mirrors the real scheduler's contract by writing a
+ * `session_interrupted` activity entry into the runtime-state
+ * store and emitting `agent.state_changed` on the bus, so the
+ * route's response body and the captured frames match production.
+ */
+function makeTestAppWithScheduler(
+  roster: readonly AgentConfig[],
+  scheduler: FakeScheduler,
+): TestContextWithScheduler {
+  const store = createInMemoryAgentRuntimeStateStore(roster);
+  const bus = createInMemoryEventBus();
+  const { buffer, subscribe } = captureBusBuffer();
+  subscribe(bus);
+  // Wire the fake scheduler's interrupt path to the same store / bus
+  // pair so the route observes production-shaped post-interrupt state.
+  scheduler.bind(store, bus, PROJECT_ID);
+  const app = new Hono<{ Variables: ServerVariables }>();
+  app.use(roleIdentity());
+  app.onError(errorBoundary(PROJECT_ID));
+  app.route(
+    "/agents",
+    agentsRoutes(store, bus, PROJECT_ID, () => scheduler.handle),
+  );
+  return { app, store, buffer, scheduler };
+}
+
+class FakeScheduler {
+  private nextResult: InterruptResult = {
+    interrupted: false,
+    reason: "no_active_cycle",
+  };
+  private store: AgentRuntimeStateStore | null = null;
+  private bus: ReturnType<typeof createInMemoryEventBus> | null = null;
+  private projectId: string | null = null;
+  public readonly calls: string[] = [];
+
+  bind(
+    store: AgentRuntimeStateStore,
+    bus: ReturnType<typeof createInMemoryEventBus>,
+    projectId: string,
+  ): void {
+    this.store = store;
+    this.bus = bus;
+    this.projectId = projectId;
+  }
+
+  setNext(result: InterruptResult): void {
+    this.nextResult = result;
+  }
+
+  /** The shape `agentsRoutes` consumes via `getScheduler`. */
+  get handle(): Scheduler {
+    return {
+      // deno-lint-ignore require-await
+      interrupt: async (id: string): Promise<InterruptResult> => {
+        this.calls.push(id);
+        const result = this.nextResult;
+        if (result.interrupted === true) {
+          if (this.store === null || this.bus === null || this.projectId === null) {
+            throw new Error("FakeScheduler.bind(...) was not called");
+          }
+          const store = this.store;
+          const bus = this.bus;
+          const projectId = this.projectId;
+          // Mirror the real scheduler's synchronous `POST /activity`
+          // for `session_interrupted` and the resulting
+          // `agent.state_changed` flip.
+          const entry: ActivityEntryResponse = {
+            id: "01HW000000000000000000FAKE",
+            timestamp: "2026-05-04T07:00:00.000Z",
+            session_id: result.sessionId,
+            agent: id,
+            role: "engineer",
+            event: "session_interrupted",
+            summary: null,
+            refs: { reason: "interrupt" },
+          };
+          const { state, changed } = store.applyActivityEvent(entry);
+          // Emit `activity.appended` mirroring the real activity-route flow.
+          emitFrame(bus, projectId, "activity.appended", {
+            entry_id: entry.id,
+            agent: entry.agent,
+            role: entry.role,
+            event: entry.event,
+          });
+          if (changed && state !== null) {
+            emitFrame(bus, projectId, "agent.state_changed", {
+              agent_id: state.id,
+              paused: state.paused,
+              status: state.status,
+            });
+          }
+        }
+        return result;
+      },
+      // The remaining methods are not exercised by the route — the
+      // fake stubs them with no-ops so the type contract is satisfied.
+      start: () => {},
+      stop: () => Promise.resolve(),
+      registerRunner: (_runner: AgentRunner) => {},
+    };
+  }
 }
 
 function authedRequest(
@@ -210,5 +325,170 @@ Deno.test("Pause then resume flips the flag back and emits two frames", async ()
   }
   if (ctx.buffer[1]!.event === "agent.state_changed") {
     assertEquals(ctx.buffer[1]!.payload.paused, false);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /agents/:id/interrupt — `interrupt-and-timeout-ux` capability
+// ---------------------------------------------------------------------------
+
+Deno.test("POST /:id/interrupt as user with active cycle → 200 with session_interrupted", async () => {
+  const fake = new FakeScheduler();
+  fake.setNext({ interrupted: true, sessionId: "session-abc" });
+  // Pre-seed alice as `running` so the response body's status flips to idle.
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  ctx.store.applyActivityEvent({
+    id: "01HW000000000000000000START",
+    timestamp: "2026-05-04T06:59:00.000Z",
+    session_id: "session-abc",
+    agent: "alice",
+    role: "engineer",
+    event: "session_start",
+    summary: null,
+    refs: {},
+  });
+  // The session_start emit happened directly on the store (no bus
+  // route involvement); reset the captured buffer so the test only
+  // observes frames produced by the interrupt request itself.
+  ctx.buffer.length = 0;
+
+  const res = await ctx.app.fetch(
+    authedRequest("http://x/agents/alice/interrupt", { method: "POST", role: "user" }),
+  );
+  assertEquals(res.status, 200);
+  const body = (await res.json()) as AgentEnvelope;
+  assertEquals(body.data.id, "alice");
+  assertEquals(body.data.status, "idle");
+  assertEquals(body.data.last_activity, "session_interrupted");
+  assertEquals(fake.calls, ["alice"]);
+  // The fake scheduler emits exactly one `activity.appended` and one
+  // `agent.state_changed` (status flipped running → idle). The route
+  // itself does NOT emit a second `agent.state_changed`.
+  const stateChanged = ctx.buffer.filter((f) => f.event === "agent.state_changed");
+  const activityAppended = ctx.buffer.filter((f) => f.event === "activity.appended");
+  assertEquals(stateChanged.length, 1, "exactly one agent.state_changed across the request");
+  assertEquals(activityAppended.length, 1);
+  if (stateChanged[0]!.event === "agent.state_changed") {
+    assertEquals(stateChanged[0]!.payload.agent_id, "alice");
+    assertEquals(stateChanged[0]!.payload.status, "idle");
+  }
+});
+
+Deno.test("POST /:id/interrupt with no active cycle → 200 idempotent, no frames", async () => {
+  const fake = new FakeScheduler();
+  fake.setNext({ interrupted: false, reason: "no_active_cycle" });
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  // Capture the pre-call snapshot so we can prove the runtime state didn't change.
+  const before = ctx.store.read("alice");
+
+  const res = await ctx.app.fetch(
+    authedRequest("http://x/agents/alice/interrupt", { method: "POST", role: "user" }),
+  );
+  assertEquals(res.status, 200);
+  const body = (await res.json()) as AgentEnvelope;
+  assertEquals(body.data.id, "alice");
+  assertEquals(body.data.last_activity, before.last_activity);
+  assertEquals(body.data.status, before.status);
+  // Idempotent: zero frames of either kind.
+  assertEquals(ctx.buffer.length, 0);
+  assertEquals(fake.calls, ["alice"]);
+});
+
+Deno.test("POST /:id/interrupt as engineer → 403 role_not_owner", async () => {
+  const fake = new FakeScheduler();
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  const res = await ctx.app.fetch(
+    authedRequest("http://x/agents/alice/interrupt", { method: "POST", role: "engineer" }),
+  );
+  assertEquals(res.status, 403);
+  const errBody = (await res.json()) as ErrorResponse;
+  assertEquals(errBody.error.code, "role_not_owner");
+  assertEquals(
+    (errBody.error.details as { role: string; target: string }).target,
+    "interrupt_agent",
+  );
+  // The scheduler must never be reached on a role-refusal.
+  assertEquals(fake.calls.length, 0);
+});
+
+Deno.test("POST /:id/interrupt as qa, po, writer → 403", async () => {
+  for (const role of ["qa", "po", "writer"]) {
+    const fake = new FakeScheduler();
+    const ctx = makeTestAppWithScheduler(ROSTER, fake);
+    const res = await ctx.app.fetch(
+      authedRequest("http://x/agents/alice/interrupt", { method: "POST", role }),
+    );
+    assertEquals(res.status, 403, `role=${role} should be rejected`);
+    assertEquals(fake.calls.length, 0);
+  }
+});
+
+Deno.test("POST /:id/interrupt for unknown agent → 404 store_not_found, scheduler not called", async () => {
+  const fake = new FakeScheduler();
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  const res = await ctx.app.fetch(
+    authedRequest("http://x/agents/ghost/interrupt", { method: "POST", role: "user" }),
+  );
+  assertEquals(res.status, 404);
+  const errBody = (await res.json()) as ErrorResponse;
+  assertEquals(errBody.error.code, "store_not_found");
+  assertEquals(fake.calls.length, 0);
+});
+
+Deno.test("POST /:id/interrupt without X-Keni-Role → 400 missing_role", async () => {
+  const fake = new FakeScheduler();
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  // Hand-build the request so the role header is absent (the helper
+  // would default to `user`).
+  const res = await ctx.app.fetch(
+    new Request("http://x/agents/alice/interrupt", { method: "POST" }),
+  );
+  assertEquals(res.status, 400);
+  const errBody = (await res.json()) as ErrorResponse;
+  assertEquals(errBody.error.code, "missing_role");
+  assertEquals(fake.calls.length, 0);
+});
+
+Deno.test("POST /:id/interrupt with non-empty body still succeeds", async () => {
+  const fake = new FakeScheduler();
+  fake.setNext({ interrupted: false, reason: "no_active_cycle" });
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  // Send a body with random JSON; the route SHALL ignore it.
+  const headers = new Headers();
+  headers.set("X-Keni-Role", "user");
+  headers.set("Content-Type", "application/json");
+  const res = await ctx.app.fetch(
+    new Request("http://x/agents/alice/interrupt", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reason: "ignored" }),
+    }),
+  );
+  assertEquals(res.status, 200);
+  assertEquals(fake.calls, ["alice"]);
+});
+
+Deno.test("POST /:id/interrupt on an unconfigured server → 500 internal_error", async () => {
+  // No `getScheduler` thunk: the route should fail fast.
+  const ctx = makeTestApp(ROSTER);
+  const res = await ctx.app.fetch(
+    authedRequest("http://x/agents/alice/interrupt", { method: "POST", role: "user" }),
+  );
+  assertEquals(res.status, 500);
+  const errBody = (await res.json()) as ErrorResponse;
+  assertEquals(errBody.error.code, "internal_error");
+});
+
+Deno.test("Interrupt route exists alongside pause/resume on the same router", async () => {
+  // Confirms that the four POST verbs (pause, resume, interrupt) and
+  // the GET roster all route off the same `/agents` sub-app.
+  const fake = new FakeScheduler();
+  fake.setNext({ interrupted: false, reason: "no_active_cycle" });
+  const ctx = makeTestAppWithScheduler(ROSTER, fake);
+  for (const path of ["/agents/alice/pause", "/agents/alice/resume", "/agents/alice/interrupt"]) {
+    const res = await ctx.app.fetch(
+      authedRequest(`http://x${path}`, { method: "POST", role: "user" }),
+    );
+    assert(res.status === 200, `${path} should resolve 200, got ${res.status}`);
   }
 });

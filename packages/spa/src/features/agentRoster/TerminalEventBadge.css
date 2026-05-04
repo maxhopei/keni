@@ -1,0 +1,29 @@
+.keni-terminal-badge {
+  display: inline-block;
+  padding: 0 var(--keni-space-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  border-radius: 9px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.keni-terminal-badge--interrupted {
+  color: var(--keni-color-danger);
+  border-color: var(--keni-color-danger);
+  background: color-mix(in srgb, var(--keni-color-danger) 12%, transparent);
+}
+
+.keni-terminal-badge--timeout {
+  color: var(--keni-color-warning);
+  border-color: var(--keni-color-warning);
+  background: color-mix(in srgb, var(--keni-color-warning) 14%, transparent);
+}
+
+.keni-terminal-badge--idle {
+  color: var(--keni-color-text-muted);
+  border-color: var(--keni-color-border);
+  background: var(--keni-color-surface);
+}

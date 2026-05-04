@@ -138,3 +138,26 @@
 .keni-activity-refs__item a:hover {
   text-decoration: underline;
 }
+
+/* Terminal-event row variants (`interrupt-and-timeout-ux` capability).
+   Distinctive left border + tinted background communicate that the
+   row records an interrupt or timeout — the canonical "ticket status
+   was not auto-reverted" caption renders inline below. */
+
+.keni-activity-row--terminal-interrupted {
+  border-left: 3px solid var(--keni-color-danger);
+  background: color-mix(in srgb, var(--keni-color-danger) 6%, transparent);
+}
+
+.keni-activity-row--terminal-timeout {
+  border-left: 3px solid var(--keni-color-warning);
+  background: color-mix(in srgb, var(--keni-color-warning) 7%, transparent);
+}
+
+.keni-activity-row__non-revert-note {
+  grid-column: 1 / -1;
+  margin-top: var(--keni-space-1);
+  color: var(--keni-color-text-muted);
+  font-size: 11px;
+  font-style: italic;
+}

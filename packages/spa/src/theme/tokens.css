@@ -41,6 +41,11 @@
   --keni-color-border: #e1e4e8;
   --keni-color-link: #0969da;
   --keni-color-danger: #cf222e;
+  /* Amber chosen for ≥ 4.5:1 against `--keni-color-bg` (#ffffff).
+     Used by terminal-event timeout badges and activity-log
+     `keni-activity-row--terminal-timeout` accents
+     (`interrupt-and-timeout-ux` capability). */
+  --keni-color-warning: #b45309;
 
   /* Accent + semantic colors */
   --keni-color-accent: #1f6feb;
@@ -121,6 +126,10 @@
     --keni-color-border: #30363d;
     --keni-color-link: #58a6ff;
     --keni-color-danger: #f85149;
+    /* Pale amber tuned to perceptual parity with the dark-theme
+       `--keni-color-disconnected` and `--keni-color-danger` so the
+       terminal-event timeout badge stays readable on dark surfaces. */
+    --keni-color-warning: #fbbf24;
 
     --keni-color-accent: #58a6ff;
     --keni-color-status-running: #3fb950;

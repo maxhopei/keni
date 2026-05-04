@@ -77,9 +77,11 @@
 .keni-agent-card__footer {
   display: flex;
   justify-content: flex-end;
+  gap: var(--keni-space-2);
 }
 
-.keni-agent-card__toggle {
+.keni-agent-card__toggle,
+.keni-agent-card__interrupt {
   padding: var(--keni-space-1) var(--keni-space-3);
   font-size: 12px;
   border: 1px solid var(--keni-color-border);
@@ -94,9 +96,21 @@
   color: var(--keni-color-accent);
 }
 
-.keni-agent-card__toggle:disabled {
+.keni-agent-card__toggle:disabled,
+.keni-agent-card__interrupt:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+.keni-agent-card__interrupt {
+  border-color: var(--keni-color-danger);
+  color: var(--keni-color-danger);
+  background: color-mix(in srgb, var(--keni-color-danger) 8%, transparent);
+}
+
+.keni-agent-card__interrupt:hover {
+  background: var(--keni-color-danger);
+  color: #ffffff;
 }
 
 .keni-agent-card__error {

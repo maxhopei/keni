@@ -290,7 +290,10 @@ When a cycle exceeds its `timeoutMs`, the scheduler aborts the cycle's `params.s
 `session_timeout` row carrying the cycle's `session_id` (the runtime separately emits its own
 `session_end` with `terminated_by: "sigterm"` once the subprocess settles — both rows are on the
 same `session_id` and tell complementary halves of the story). The scheduler does not auto-revert
-ticket status on interrupt or timeout — that decision belongs to a future re-checkout flow.
+ticket status on interrupt or timeout — that decision belongs to a future re-checkout flow. The SPA
+surfaces both verbs through the agent roster card and the activity log (see
+[Interrupt and timeouts](#interrupt-and-timeouts) under "Run the SPA"); the orchestration server
+exposes `POST /agents/:id/interrupt` as the user-facing seam onto `Scheduler.interrupt(agentId)`.
 
 The plug-in surface for roles is one interface:
 
@@ -392,7 +395,40 @@ The SPA mounts four routes inside the app shell:
   (rendering a prominent conflict panel when the server returns `409 merge_conflict`).
 - `/activity` — **activity log**: debounced `agent` / `role` / `from` / `to` filter form, reverse-
   chronological list, `ticket:` and `pr:` refs render as navigating links. A burst of
-  `activity.appended` frames collapses into one refetch (250 ms debounce).
+  `activity.appended` frames collapses into one refetch (250 ms debounce). Rows for
+  `session_interrupted` and `session_timeout` are styled with the danger / warning accent and, when
+  the row references a ticket, carry the explicit "Ticket status was not auto-reverted." caption
+  (see "Interrupt and timeouts" below).
+
+#### Interrupt and timeouts
+
+Two verbs control a misbehaving agent on the SPA:
+
+- **Pause** is a _scheduling preference_. Toggling Pause on a roster card flips the `paused` flag
+  via `POST /agents/:id/pause`; the next scheduler tick is silently skipped, but the agent's current
+  in-flight cycle is allowed to complete. Resume re-enables ticking.
+- **Interrupt** is the _abort verb_. The destructive Interrupt button is rendered only while the
+  card's `status === "running"`; clicking it opens a confirmation dialog that explicitly names
+  SIGTERM → SIGKILL termination and the non-revert rule below. Confirmation calls
+  `POST /agents/:id/interrupt`, which delegates to `Scheduler.interrupt(agentId)`. While the call is
+  in flight the button reads "Interrupting…" and is disabled (the UI is _not_ optimistic — the
+  server's `agent.state_changed` frame is the authoritative status flip).
+
+After either an interrupt or a wall-clock timeout, the roster card displays a **terminal-event
+badge** ("Interrupted" in red, "Timed out" in amber) next to the agent's last activity. The badge
+persists until the next cycle starts; tooltips repeat the non-revert rule.
+
+**The ticket the agent was working on is not auto-reverted.** A `session_interrupted` or
+`session_timeout` row in the activity log records the cause and carries an explicit "Ticket status
+was not auto-reverted." caption when the row references a ticket. Reviewing and re-routing the
+ticket is the user's responsibility for the prototype — a future `manual_override` flow will let the
+user re-walk a ticket through the status graph against an explicit override comment, but it is not
+built yet.
+
+The full user-facing contract lives in the
+[`interrupt-and-timeout-ux` capability spec](./openspec/changes/spa-interrupt-and-timeout-controls/specs/interrupt-and-timeout-ux/spec.md);
+the server-side invariants live in the
+[scheduler section of this README](#run-the-orchestration-server).
 
 The contract for the shell, transport clients, and routing scaffold lives in the
 [`spa-shell` capability spec](./openspec/changes/spa-shell-and-agent-roster/specs/spa-shell/spec.md);

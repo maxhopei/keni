@@ -36,6 +36,7 @@ export const ROSTER_REFETCH_DEBOUNCE_MS = 250;
 
 interface CardState {
   busy: boolean;
+  interrupting: boolean;
   error: string | null;
 }
 
@@ -135,7 +136,11 @@ export function AgentRosterPanel() {
       // roll the local row back and surface the error.
       setCardStates((prev) => ({
         ...prev,
-        [agent.id]: { busy: true, error: null },
+        [agent.id]: {
+          busy: true,
+          interrupting: prev[agent.id]?.interrupting ?? false,
+          error: null,
+        },
       }));
       setAgents((current) => {
         if (current === null) return current;
@@ -164,7 +169,11 @@ export function AgentRosterPanel() {
         });
         setCardStates((prev) => ({
           ...prev,
-          [agent.id]: { busy: false, error: null },
+          [agent.id]: {
+            busy: false,
+            interrupting: prev[agent.id]?.interrupting ?? false,
+            error: null,
+          },
         }));
       } catch (caught) {
         // Rollback to the original `paused` flag.
@@ -185,7 +194,62 @@ export function AgentRosterPanel() {
           : String(caught);
         setCardStates((prev) => ({
           ...prev,
-          [agent.id]: { busy: false, error: message },
+          [agent.id]: {
+            busy: false,
+            interrupting: prev[agent.id]?.interrupting ?? false,
+            error: message,
+          },
+        }));
+      }
+    },
+    [apiClient],
+  );
+
+  const interruptAgent = useCallback(
+    async (agent: AgentResponse): Promise<void> => {
+      // Non-optimistic: do NOT flip `status` locally; show busy +
+      // "Interrupting…" and let the server's `agent.state_changed`
+      // frame land authoritatively (`design.md` Decision 8).
+      setCardStates((prev) => ({
+        ...prev,
+        [agent.id]: {
+          busy: prev[agent.id]?.busy ?? false,
+          interrupting: true,
+          error: null,
+        },
+      }));
+      try {
+        const envelope = await apiClient.interruptAgent(agent.id);
+        const authoritative = envelope.data;
+        setAgents((current) => {
+          if (current === null) return current;
+          const idx = current.findIndex((a) => a.id === agent.id);
+          if (idx < 0) return current;
+          const arr = current.slice();
+          arr[idx] = authoritative;
+          return arr;
+        });
+        setCardStates((prev) => ({
+          ...prev,
+          [agent.id]: {
+            busy: prev[agent.id]?.busy ?? false,
+            interrupting: false,
+            error: null,
+          },
+        }));
+      } catch (caught) {
+        const message = caught instanceof KeniApiError
+          ? caught.message
+          : caught instanceof Error
+          ? caught.message
+          : String(caught);
+        setCardStates((prev) => ({
+          ...prev,
+          [agent.id]: {
+            busy: prev[agent.id]?.busy ?? false,
+            interrupting: false,
+            error: message,
+          },
         }));
       }
     },
@@ -202,11 +266,13 @@ export function AgentRosterPanel() {
           agent={agent}
           error={state?.error ?? null}
           busy={state?.busy ?? false}
+          interrupting={state?.interrupting ?? false}
           onTogglePause={(next) => togglePause(agent, next)}
+          onInterrupt={() => interruptAgent(agent)}
         />
       );
     });
-  }, [agents, cardStates, togglePause]);
+  }, [agents, cardStates, togglePause, interruptAgent]);
 
   return (
     <section

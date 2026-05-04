@@ -62,12 +62,17 @@ export interface ServerDeps {
   readonly agentRuntimeStateStore: AgentRuntimeStateStore;
   /**
    * Optional handle to the in-process role-runtime scheduler. `runServer`
-   * instantiates it once at bootstrap and forwards it here so future route
-   * handlers (step 12's interrupt endpoint) can call `scheduler.interrupt(agentId)`
-   * directly without re-resolving any dependency. The scheduler is owned by
-   * `runServer`'s lifecycle (`spec.md` §6.1, scheduler capability spec).
+   * instantiates the scheduler AFTER `startServer` (the scheduler needs
+   * the bound server URL), so this field is always supplied as a
+   * thunk: the route handlers dereference it lazily at request time.
+   * The thunk returns `null` until the scheduler has been wired; the
+   * `POST /agents/:id/interrupt` route surfaces a 500 in that window.
+   *
+   * Tests that exercise the interrupt route pass a thunk that returns
+   * a fake scheduler. Tests that don't exercise it omit this field
+   * (the route is mounted but never called).
    */
-  readonly scheduler?: Scheduler;
+  readonly getScheduler?: () => Scheduler | null;
   /**
    * Optional engineer-workspace provisioner. When supplied together with
    * `projectRepoPath`, `createServer` mounts `POST /prs/:id/merge` and
@@ -174,7 +179,12 @@ export function createServer(
   );
   app.route(
     "/agents",
-    agentsRoutes(deps.agentRuntimeStateStore, deps.eventBus, opts.projectId),
+    agentsRoutes(
+      deps.agentRuntimeStateStore,
+      deps.eventBus,
+      opts.projectId,
+      deps.getScheduler,
+    ),
   );
   app.route("/events", eventsRoute(deps.eventBus));
 
