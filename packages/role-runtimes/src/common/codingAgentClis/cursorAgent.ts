@@ -50,8 +50,8 @@ export const cursorAgentEntry: CodingAgentCliEntry = {
   cliBinary: "cursor-agent",
   buildArgs: (invocation, _mcpConfigPath) =>
     invocation.workspacePath !== null
-      ? ["--print", "--approve-mcps", "--workspace", invocation.workspacePath]
-      : ["--print", "--approve-mcps"],
+      ? ["--print", "--approve-mcps", "--trust", "--workspace", invocation.workspacePath]
+      : ["--print", "--approve-mcps", "--trust"],
   promptInjection: "stdin",
   resumeFlag: "--resume",
   envAllowlist: ["HOME", "PATH", "CURSOR_API_KEY"],

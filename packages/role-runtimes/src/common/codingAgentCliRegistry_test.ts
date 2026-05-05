@@ -116,7 +116,7 @@ Deno.test(
 );
 
 Deno.test(
-  "codingAgentCliRegistry['claude'].buildArgs uses --mcp-config and --print, and its strategy is tempfile-json",
+  "codingAgentCliRegistry['claude'].buildArgs uses --mcp-config, --print, and --permission-mode bypassPermissions, and its strategy is tempfile-json",
   () => {
     const entry = codingAgentCliRegistry["claude"];
     const argv = entry.buildArgs(fakeInvocation(), "/tmp/mcp-1234.json");
@@ -136,6 +136,22 @@ Deno.test(
       !argv.includes("--interactive"),
       `argv must not contain '--interactive'; got argv=${JSON.stringify(argv)}`,
     );
+
+    const permModeIdx = argv.indexOf("--permission-mode");
+    assert(
+      permModeIdx >= 0,
+      `expected '--permission-mode' to make the engineer loop non-interactive (matches cursor-agent's --approve-mcps --trust); got argv=${
+        JSON.stringify(argv)
+      }`,
+    );
+    assertEquals(
+      argv[permModeIdx + 1],
+      "bypassPermissions",
+      `expected the value after '--permission-mode' to be 'bypassPermissions'; got argv=${
+        JSON.stringify(argv)
+      }`,
+    );
+
     assertEquals(entry.mcpConfigStrategy.kind, "tempfile-json");
   },
 );
