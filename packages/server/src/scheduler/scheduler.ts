@@ -413,27 +413,45 @@ export function createScheduler(
           });
           return;
         }
-        const drainOutcomes = await Promise.race([
-          Promise.allSettled(draining).then((results) => ({ kind: "drained" as const, results })),
-          new Promise<{ kind: "timeout" }>((resolveFn) => {
-            clock.setTimeout(() => {
-              resolveFn({ kind: "timeout" });
-            }, drainTimeoutMs);
-          }),
-        ]);
-        if (drainOutcomes.kind === "timeout") {
-          exceededTimeout = draining.length;
+        // Capture the drain-timeout handle so the winning branch of the
+        // race can cancel it. Without this, a fast drain (the common
+        // path) leaves the 30s setTimeout registered, which both keeps
+        // the process event loop alive past `stop()` and trips Deno's
+        // test-leak detector when one integration test's `stop()`
+        // returns before the timer fires and the next test starts.
+        let drainTimeoutHandle: ReturnType<typeof clock.setTimeout> | null = null;
+        try {
+          const drainOutcomes = await Promise.race([
+            Promise.allSettled(draining).then((results) => ({
+              kind: "drained" as const,
+              results,
+            })),
+            new Promise<{ kind: "timeout" }>((resolveFn) => {
+              drainTimeoutHandle = clock.setTimeout(() => {
+                drainTimeoutHandle = null;
+                resolveFn({ kind: "timeout" });
+              }, drainTimeoutMs);
+            }),
+          ]);
+          if (drainOutcomes.kind === "timeout") {
+            exceededTimeout = draining.length;
+            logger.log("info", "scheduler.stopped", {
+              drained: 0,
+              exceeded_timeout: exceededTimeout,
+            });
+            return;
+          }
+          const drained = drainOutcomes.results.filter((r) => r.status === "fulfilled").length;
           logger.log("info", "scheduler.stopped", {
-            drained: 0,
-            exceeded_timeout: exceededTimeout,
+            drained,
+            exceeded_timeout: drainOutcomes.results.length - drained,
           });
-          return;
+        } finally {
+          if (drainTimeoutHandle !== null) {
+            clock.clearTimeout(drainTimeoutHandle);
+            drainTimeoutHandle = null;
+          }
         }
-        const drained = drainOutcomes.results.filter((r) => r.status === "fulfilled").length;
-        logger.log("info", "scheduler.stopped", {
-          drained,
-          exceeded_timeout: drainOutcomes.results.length - drained,
-        });
       })();
       return stopPromise;
     },
