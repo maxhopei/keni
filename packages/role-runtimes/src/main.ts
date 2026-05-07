@@ -65,10 +65,14 @@ export { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "./common/promp
  * Engineer-runtime public surface (introduced by the
  * `engineer-runtime-and-workspace` change). The {@link WorkspaceProvisioner}
  * interface is the seam between the engineer runtime and the per-agent
- * sparse-checkout clone; {@link GitWorkspaceProvisioner} is the
- * production default; {@link FakeWorkspaceProvisioner} is the test
- * fake. {@link WorkspaceProvisioningError} is the typed error every
+ * sparse-checkout clone; `GitWorkspaceProvisioner` is the production
+ * default; `WorkspaceProvisioningError` is the typed error every
  * workspace operation rejects with.
+ *
+ * The companion fake (`FakeWorkspaceProvisioner`) lives under this
+ * package's secondary entry point `@keni/role-runtimes/test-fakes` —
+ * production code never imports it, and tests in other packages reach
+ * for it via that specifier rather than the bare package name.
  */
 export type {
   WorkspaceLogger,
@@ -78,12 +82,6 @@ export type {
   WorkspaceProvisioningErrorDetails,
 } from "./engineer/workspace/interface.ts";
 export { WorkspaceProvisioningError } from "./engineer/workspace/interface.ts";
-
-export type {
-  FakeWorkspaceProvisionerCall,
-  FakeWorkspaceProvisionerOpts,
-} from "./engineer/workspace/fakes/fakeWorkspaceProvisioner.ts";
-export { FakeWorkspaceProvisioner } from "./engineer/workspace/fakes/fakeWorkspaceProvisioner.ts";
 
 export type { GitWorkspaceProvisionerOpts } from "./engineer/workspace/git.ts";
 export { GitWorkspaceProvisioner, SPARSE_CHECKOUT_PATTERN } from "./engineer/workspace/git.ts";

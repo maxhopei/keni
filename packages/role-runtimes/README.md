@@ -13,30 +13,47 @@ responsibilities are:
 ## Layout
 
 ```
-packages/role-runtimes/src/
-├── common/                       # role-agnostic seven-step cycle + types
-│   ├── startCycle.ts             # the cycle wrapper (single invocation, stateless)
-│   ├── activityClient.ts         # typed POST /activity adapter (X-Keni-{Role,Agent} stamped)
-│   ├── codingAgentCliRegistry.ts # closed registry: KnownCli, CodingAgentCliEntry, McpConfigStrategy
-│   ├── codingAgentClis/          # one file per CLI; each exports a single CodingAgentCliEntry
-│   │   ├── claude.ts             # claudeEntry (tempfile-json strategy)
-│   │   ├── cursorAgent.ts        # cursorAgentEntry (workspace-json under .cursor/mcp.json)
-│   │   └── codex.ts              # codexEntry (workspace-toml under .codex/config.toml)
-│   ├── codingAgentInvoker.ts     # createSubprocessCodingAgentInvoker + strategy executor
-│   ├── types.ts                  # AgentRunner, BundledPrompt, McpServerConfig, RoleCycleResult, …
-│   └── integration_test.ts       # end-to-end fake-coding-agent driving startCycle
-├── engineer/                     # engineer specialisation
-│   ├── runner.ts                 # createEngineerRunner factory
-│   ├── prompts/
-│   │   └── engineer.ts           # ENGINEER_PROMPT_NAME + ENGINEER_PROMPT_BODY (eight sections)
-│   ├── workspace/
-│   │   ├── interface.ts          # WorkspaceProvisioner + WorkspaceProvisioningError
-│   │   ├── git.ts                # GitWorkspaceProvisioner (production default)
-│   │   └── fakes/
-│   │       └── fakeWorkspaceProvisioner.ts   # test double, records calls, no FS touch
-│   └── integration_test.ts       # in-process runServer + workspace shape + POST /prs/:id/merge
-└── main.ts                       # barrel re-exports
+packages/role-runtimes/
+├── src/                                      # production code only
+│   ├── common/                               # role-agnostic seven-step cycle + types
+│   │   ├── startCycle.ts                     # the cycle wrapper (single invocation, stateless)
+│   │   ├── activityClient.ts                 # typed POST /activity adapter (X-Keni-{Role,Agent} stamped)
+│   │   ├── codingAgentCliRegistry.ts         # closed registry: KnownCli, CodingAgentCliEntry, McpConfigStrategy
+│   │   ├── codingAgentClis/                  # one file per CLI; each exports a single CodingAgentCliEntry
+│   │   │   ├── claude.ts                     # claudeEntry (tempfile-json strategy)
+│   │   │   ├── cursorAgent.ts                # cursorAgentEntry (workspace-json under .cursor/mcp.json)
+│   │   │   └── codex.ts                      # codexEntry (workspace-toml under .codex/config.toml)
+│   │   ├── codingAgentInvoker.ts             # createSubprocessCodingAgentInvoker + strategy executor
+│   │   └── types.ts                          # AgentRunner, BundledPrompt, McpServerConfig, RoleCycleResult, …
+│   ├── engineer/                             # engineer specialisation
+│   │   ├── runner.ts                         # createEngineerRunner factory
+│   │   ├── prompts/engineer.ts               # ENGINEER_PROMPT_NAME + ENGINEER_PROMPT_BODY (eight sections)
+│   │   └── workspace/
+│   │       ├── interface.ts                  # WorkspaceProvisioner + WorkspaceProvisioningError
+│   │       └── git.ts                        # GitWorkspaceProvisioner (production default)
+│   └── main.ts                               # production barrel (no fakes)
+└── tests/                                    # all tests + test-only support code
+    ├── unit/                                 # mirrors src/ tree; one *_test.ts per module
+    ├── integration/                          # in-process runServer + cursorAgent argv shape
+    │   ├── common/integration_test.ts        # end-to-end fake-coding-agent driving startCycle
+    │   ├── engineer/integration_test.ts      # in-process runServer + workspace shape + POST /prs/:id/merge
+    │   └── cursorAgent_test.ts               # cursor-agent registry-entry argv sanity check
+    ├── fakes/                                # test doubles (re-exported via ./test-fakes)
+    │   ├── common/fakeCodingAgentInvoker.ts  # fake CodingAgentInvoker, records lifecycle calls
+    │   ├── engineer/workspace/fakeWorkspaceProvisioner.ts  # records calls, no FS touch
+    │   └── mod.ts                            # barrel for `@keni/role-runtimes/test-fakes`
+    └── fixtures/
+        └── fake-coding-agent.ts              # standalone script run as a child process by tests
 ```
+
+The package's `deno.json` declares two `exports` entries:
+
+- `"."` → `./src/main.ts` — the production barrel. Production code in other packages
+  (`@keni/server`, `@keni/cli`) imports from `@keni/role-runtimes`.
+- `"./test-fakes"` → `./tests/fakes/mod.ts` — the test-only barrel. Cross-package test code
+  (`packages/server/tests/**`, `packages/cli/tests/**`) imports `FakeWorkspaceProvisioner` and
+  `createFakeCodingAgentInvoker` from `@keni/role-runtimes/test-fakes`. The production barrel
+  deliberately does NOT re-export anything from `tests/fakes/`.
 
 ### Adding a new coding-agent CLI to the registry
 
@@ -50,8 +67,8 @@ packages/role-runtimes/src/
      config file (e.g. `.codex/config.toml`).
 2. Bind the entry under its `KnownCli` key in `codingAgentCliRegistry.ts` and extend the `KnownCli`
    literal union and `isKnownCli` guard.
-3. Add a registry-shape scenario in `codingAgentCliRegistry_test.ts` pinning the new entry's argv
-   invariants and strategy fields.
+3. Add a registry-shape scenario in `tests/unit/common/codingAgentCliRegistry_test.ts` pinning the
+   new entry's argv invariants and strategy fields.
 4. (Optional) Add an integration test against the real binary under
    `packages/role-runtimes/tests/integration/<newCli>_test.ts`, gated on the binary being on `PATH`.
 

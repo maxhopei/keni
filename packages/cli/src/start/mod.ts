@@ -147,8 +147,9 @@ export interface RunStartDeps {
   /**
    * Override the workspace provisioner used to ensure engineer
    * workspaces. Production wires a `GitWorkspaceProvisioner`; the
-   * end-to-end smoke test injects a `FakeWorkspaceProvisioner` so the
-   * boot path runs without touching git or the filesystem.
+   * end-to-end smoke test injects a `FakeWorkspaceProvisioner`
+   * (imported from `@keni/role-runtimes/test-fakes`) so the boot path
+   * runs without touching git or the filesystem.
    */
   readonly workspaceProvisioner?: WorkspaceProvisioner;
 }

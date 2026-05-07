@@ -133,9 +133,10 @@ export interface RunServerDeps {
   /**
    * Override the {@link WorkspaceProvisioner}. Defaults to
    * `new GitWorkspaceProvisioner({ homeDir, logger: workspaceLoggerOf(schedulerLogger) })`.
-   * Tests pass a `FakeWorkspaceProvisioner` to assert on
-   * `ensureProvisioned` / `pullMain` / `discardProvisioned` calls without
-   * touching git or the filesystem.
+   * Tests pass a `FakeWorkspaceProvisioner` (imported from
+   * `@keni/role-runtimes/test-fakes`) to assert on `ensureProvisioned` /
+   * `pullMain` / `discardProvisioned` calls without touching git or the
+   * filesystem.
    */
   readonly workspaceProvisioner?: WorkspaceProvisioner;
   /**

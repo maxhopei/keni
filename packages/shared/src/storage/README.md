@@ -156,14 +156,19 @@ test that needs to verify on-disk format.
 
 ## Contract tests
 
-Each artifact directory ships a `contract_test.ts` exporting a single function
-`runXStoreContract(name, factory)`. Both `memory_test.ts` and `file_test.ts` invoke it with their
-respective adapter factories. If either adapter drifts from the documented contract — missing a
-field, throwing the wrong error, returning summaries with body content, etc. — the contract test
-fails for that adapter (and only that adapter), pointing directly at the divergence.
+Each artifact directory ships a contract helper at
+`packages/shared/tests/contracts/storage/<artifact>/<artifact>StoreContract.ts` exporting a single
+function `runXStoreContract(name, factory)`. Both `memory_test.ts` and `file_test.ts` (under
+`packages/shared/tests/unit/storage/<artifact>/`) invoke it with their respective adapter factories.
+If either adapter drifts from the documented contract — missing a field, throwing the wrong error,
+returning summaries with body content, etc. — the contract test fails for that adapter (and only
+that adapter), pointing directly at the divergence.
+
+The contract helpers deliberately do NOT use the `_test.ts` suffix: they register `Deno.test` cases
+on behalf of their callers, so Deno's auto-discovery should not load them as standalone test files.
 
 To author a new adapter (e.g., a future `PostgresTicketStore`), implement the interface, then create
-`tickets/postgres_test.ts` that calls
+`packages/shared/tests/unit/storage/tickets/postgres_test.ts` that calls
 `runTicketStoreContract("PostgresTicketStore", () => makeIt())`. Passing the contract is the entry
 ticket.
 
@@ -224,26 +229,37 @@ This module deliberately does **not** ship:
 
 ## Module map
 
+Production code lives under `packages/shared/src/storage/`; tests and shared contract helpers live
+under `packages/shared/tests/`.
+
 ```
-storage/
-├── README.md           ← this file
-├── mod.ts              ← public barrel — every export the world sees
-├── errors.ts           ← four error classes
-├── ids.ts              ← generateTicketId / generatePrId / generateActivityId
-├── atomic.ts           ← writeFileAtomic + __setPreRenameHook
-├── paths.ts            ← resolveProjectPaths / resolveGlobalPaths
-├── tickets/
-│   ├── interface.ts    ← TicketStore, Ticket, TicketHeader, ...
-│   ├── shared.ts       ← matchTicket, validateHeaderPatch
-│   ├── memory.ts       ← InMemoryTicketStore
-│   ├── file.ts         ← FileTicketStore
-│   ├── contract_test.ts← runTicketStoreContract
-│   ├── memory_test.ts  ← contract + mem-specific
-│   └── file_test.ts    ← contract + file-specific
-├── prs/
-│   └── ...             ← same structure as tickets/
-├── activity/
-│   └── ...
-└── config/
-    └── ...
+packages/shared/
+├── src/storage/
+│   ├── README.md           ← this file
+│   ├── mod.ts              ← public barrel — every export the world sees
+│   ├── errors.ts           ← four error classes
+│   ├── ids.ts              ← generateTicketId / generatePrId / generateActivityId
+│   ├── atomic.ts           ← writeFileAtomic + __setPreRenameHook
+│   ├── paths.ts            ← resolveProjectPaths / resolveGlobalPaths
+│   ├── tickets/
+│   │   ├── interface.ts    ← TicketStore, Ticket, TicketHeader, ...
+│   │   ├── shared.ts       ← matchTicket, validateHeaderPatch
+│   │   ├── memory.ts       ← InMemoryTicketStore
+│   │   └── file.ts         ← FileTicketStore
+│   ├── prs/                ← same structure as tickets/
+│   ├── activity/           ← same structure as tickets/
+│   └── config/             ← same structure as tickets/
+└── tests/
+    ├── unit/storage/
+    │   ├── tickets/
+    │   │   ├── memory_test.ts          ← contract + mem-specific
+    │   │   └── file_test.ts            ← contract + file-specific
+    │   ├── prs/                        ← same shape
+    │   ├── activity/                   ← same shape
+    │   └── config/                     ← same shape
+    └── contracts/storage/
+        ├── tickets/ticketStoreContract.ts        ← runTicketStoreContract
+        ├── prs/prStoreContract.ts                ← runPRStoreContract
+        ├── activity/activityLogStoreContract.ts  ← runActivityLogStoreContract
+        └── config/configStoreContract.ts         ← runConfigStoreContract
 ```

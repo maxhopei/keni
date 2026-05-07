@@ -6,8 +6,9 @@
  * coding-agent invoker, env allowlist, MCP server config) is supplied
  * by the registered runner. Step 09 (engineer specialisation) and
  * step 17 (PO mode selection) `register(...)` their runners against
- * this registry; tests register a fake runner that wraps step 07's
- * `fakeCodingAgentInvoker`.
+ * this registry; tests register a fake runner that wraps the
+ * `createFakeCodingAgentInvoker` factory from
+ * `@keni/role-runtimes/test-fakes`.
  *
  * Registration is idempotent for the same `runner.role`: a second
  * `register` for the same role replaces the first and emits an

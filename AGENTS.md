@@ -108,6 +108,11 @@ structural tests.
    `.keni/` is sparse-excluded so engineer agents cannot read tickets/PRs/config directly — the MCP
    tool surface is the only seam. Per-workspace local git identity; the host's `~/.gitconfig` is
    never read or written. (Capability spec: `engineer-runtime`.)
+7. **Tests live under `packages/<pkg>/tests/`, never under `packages/<pkg>/src/`.** Each package
+   carries a `tests/{unit,integration,e2e}/` tree; cross-package fakes are exposed via the
+   `./test-fakes` secondary entry point on the package's `deno.json`. A structural test in
+   `@keni/shared` (`tests/unit/repoLayout_test.ts`) pins this layout so accidental drift fails
+   `deno task test`. (Capability spec: `developer-setup`.)
 
 ## Editing the codebase
 

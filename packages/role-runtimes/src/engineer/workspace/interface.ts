@@ -11,9 +11,11 @@
  * The interface is the boundary between the cycle (which does not care
  * how the workspace is materialised) and the production
  * {@link GitWorkspaceProvisioner} (which shells out to `git`) or the
- * {@link FakeWorkspaceProvisioner} (which records calls without
- * touching the filesystem). Tests pass the fake; `runServer` wires the
- * git-backed default.
+ * `FakeWorkspaceProvisioner` shipped via this package's
+ * `./test-fakes` secondary entry point (which records calls without
+ * touching the filesystem). Tests import the fake from
+ * `@keni/role-runtimes/test-fakes`; `runServer` wires the git-backed
+ * default.
  *
  * @module
  */
