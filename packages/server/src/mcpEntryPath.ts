@@ -5,7 +5,7 @@
  * Resolved against `import.meta.url` so the constant is correct
  * regardless of the caller's current working directory. The engineer's
  * `mcpServerConfig` (built by `buildEngineerMcpServerConfig` from
- * `@keni/role-runtimes`) takes this path verbatim and spawns
+ * `@keni/runtime-engineer`) takes this path verbatim and spawns
  * `deno run -A <MCP_ENTRY_PATH> --agent <id> --server-url <url>
  * --workspace <abs-path>` per cycle.
  *

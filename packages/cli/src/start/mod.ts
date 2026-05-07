@@ -32,8 +32,6 @@ import type { AgentConfig, ProjectConfig } from "@keni/shared";
 import {
   type AgentRuntimeStateStore,
   consoleSchedulerLogger,
-  createMcpHttpClient,
-  MCP_ENTRY_PATH,
   runServer,
   type RunServerDeps,
   type Scheduler,
@@ -43,13 +41,10 @@ import {
   startServer as defaultStartServer,
   type StartServerOptions,
 } from "@keni/server";
-import {
-  type CodingAgentCliEntry,
-  codingAgentCliRegistry,
-  type EngineerActivityHttpClient,
-  type WorkspaceProvisioner,
-} from "@keni/role-runtimes";
-import { buildProductionEngineerRunnerFactory } from "./engineerRunner.ts";
+import { type CodingAgentCliEntry, codingAgentCliRegistry } from "@keni/runtime-common";
+import type { WorkspaceProvisioner } from "@keni/runtime-workspace";
+import { wire as engineerWire } from "@keni/runtime-engineer";
+import { wire as poWire } from "@keni/runtime-po";
 import type { DispatcherIO } from "../main.ts";
 import { ProjectStateError, UsageError } from "../init/errors.ts";
 import { type ParsedStartArgs, parseStartArgs as parseStartArgsImpl } from "./args.ts";
@@ -105,12 +100,19 @@ export interface RunStartDeps {
   /**
    * Override for `runServer`. The default is the real
    * `@keni/server`'s `runServer`. The smoke test replaces this when
-   * it wants to drive a stubbed engineer runner without actually
+   * it wants to drive a stubbed runner registry without actually
    * provisioning workspaces.
    */
   readonly runServer?: typeof runServer;
-  /** Override for the engineer-runner factory passed through `runServer`. */
-  readonly makeEngineerRunner?: RunServerDeps["makeEngineerRunner"];
+  /**
+   * Polymorphic per-role plug-in registry forwarded to
+   * `runServer.RunServerDeps.roleWires`. Tests override this to
+   * inject a fake engineer wire / fake PO wire that returns a
+   * precheck-skip runner without spawning real subprocesses. When
+   * undefined, `runStart` defaults to
+   * `{ engineer: engineerWire, po: poWire }` from the role packages.
+   */
+  readonly roleWires?: RunServerDeps["roleWires"];
   /**
    * Test seam to inject a captured scheduler logger so assertions can
    * inspect the production helper's `engineer.runner_skipped` warn line
@@ -124,9 +126,10 @@ export interface RunStartDeps {
    * fixture entries (e.g. a fake-coding-agent script under
    * `Deno.Command`) without changing the closed `KnownCli` production
    * union. The override is shallow-merged on top of
-   * `codingAgentCliRegistry`; production callers leave it `undefined`
-   * and the helper sees the unmodified registry. Ignored when
-   * {@link makeEngineerRunner} is supplied (the test seam wins
+   * `codingAgentCliRegistry` and forwarded through
+   * `RunServerDeps.codingAgentCliRegistry`; production callers leave
+   * it `undefined` and the role wires see the unmodified registry.
+   * Ignored when {@link roleWires} is supplied (the test seam wins
    * verbatim — see `cli-start` capability spec).
    */
   readonly codingAgentCliRegistryOverride?: Readonly<
@@ -148,8 +151,8 @@ export interface RunStartDeps {
    * Override the workspace provisioner used to ensure engineer
    * workspaces. Production wires a `GitWorkspaceProvisioner`; the
    * end-to-end smoke test injects a `FakeWorkspaceProvisioner`
-   * (imported from `@keni/role-runtimes/test-fakes`) so the boot path
-   * runs without touching git or the filesystem.
+   * (imported from `@keni/runtime-workspace/test-fakes`) so the boot
+   * path runs without touching git or the filesystem.
    */
   readonly workspaceProvisioner?: WorkspaceProvisioner;
 }
@@ -327,25 +330,19 @@ export async function runStart(
   // one logger instance — identical formatting, identical destination.
   const schedulerLogger: SchedulerLogger = deps.schedulerLogger ?? consoleSchedulerLogger();
 
-  // Build the production `makeEngineerRunner` only when the caller did
-  // not supply one. The caller-supplied factory wins verbatim per the
-  // `cli-start` capability spec; the e2e smoke test's precheck-skip
-  // stub continues to short-circuit before any registry lookup runs.
+  // Default the polymorphic role-wire registry to the production
+  // role-package exports (`engineer` + `po`). The caller's
+  // `RunStartDeps.roleWires` wins verbatim per the `cli-start`
+  // capability spec; the e2e smoke test's precheck-skip stubs
+  // short-circuit before any role-specific subprocess runs.
   const mergedRegistry: Readonly<Record<string, CodingAgentCliEntry>> = {
     ...codingAgentCliRegistry,
     ...(deps.codingAgentCliRegistryOverride ?? {}),
   };
-  const productionMakeEngineerRunner = deps.makeEngineerRunner ??
-    buildProductionEngineerRunnerFactory({
-      resolvedConfig: loaded.resolvedConfig,
-      registry: mergedRegistry,
-      mcpEntryPath: MCP_ENTRY_PATH,
-      makeActivityHttpClient: (
-        serverUrl: string,
-        agentId: string,
-      ): EngineerActivityHttpClient => createMcpHttpClient({ serverUrl, agentId }),
-      logger: schedulerLogger,
-    });
+  const roleWires: RunServerDeps["roleWires"] = deps.roleWires ?? {
+    engineer: engineerWire,
+    po: poWire,
+  };
 
   const runServerDeps: RunServerDeps = {
     out: (line) => io.out(line),
@@ -368,7 +365,8 @@ export async function runStart(
       tap.scheduler = scheduler;
     },
     ...(spa.mode === "bundled" ? { staticAssetsRoot: spa.root } : {}),
-    makeEngineerRunner: productionMakeEngineerRunner,
+    roleWires,
+    codingAgentCliRegistry: mergedRegistry,
     ...(deps.workspaceProvisioner !== undefined
       ? { workspaceProvisioner: deps.workspaceProvisioner }
       : {}),

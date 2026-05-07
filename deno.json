@@ -3,7 +3,10 @@
     "./packages/cli",
     "./packages/server",
     "./packages/spa",
-    "./packages/role-runtimes",
+    "./packages/runtime-common",
+    "./packages/runtime-workspace",
+    "./packages/runtime-engineer",
+    "./packages/runtime-po",
     "./packages/shared"
   ],
   "nodeModulesDir": "auto",

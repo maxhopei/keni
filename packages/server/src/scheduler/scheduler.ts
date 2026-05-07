@@ -43,8 +43,8 @@
  */
 
 import type { AgentConfig, AgentId, Role } from "@keni/shared";
-import type { RoleCycleParams, RoleCycleResult } from "@keni/role-runtimes";
-import { startCycle as defaultStartCycle } from "@keni/role-runtimes";
+import type { RoleCycleParams, RoleCycleResult } from "@keni/runtime-common";
+import { startCycle as defaultStartCycle } from "@keni/runtime-common";
 import type { AgentRuntimeStateStore } from "../agentState.ts";
 import { appendSessionInterrupted, appendSessionTimeout } from "./activityClient.ts";
 import type { SchedulerClock } from "./clock.ts";
@@ -83,7 +83,7 @@ export interface SchedulerDeps {
   /**
    * Optional hook for unit tests to substitute the `startCycle`
    * implementation. Production wires the real
-   * `@keni/role-runtimes/startCycle`.
+   * `@keni/runtime-common/startCycle`.
    */
   readonly startCycle?: typeof defaultStartCycle;
 }

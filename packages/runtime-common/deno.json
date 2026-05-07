@@ -1,0 +1,11 @@
+{
+  "name": "@keni/runtime-common",
+  "version": "0.0.0",
+  "exports": {
+    ".": "./src/main.ts",
+    "./test-fakes": "./tests/fakes/mod.ts"
+  },
+  "tasks": {
+    "build": "echo noop"
+  }
+}

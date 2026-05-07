@@ -4,11 +4,11 @@
  * The scheduler imports zero role-specific code (engineer, qa, po,
  * writer). Every role-shaped concern (precheck, prompt resolver,
  * coding-agent invoker, env allowlist, MCP server config) is supplied
- * by the registered runner. Step 09 (engineer specialisation) and
- * step 17 (PO mode selection) `register(...)` their runners against
- * this registry; tests register a fake runner that wraps the
- * `createFakeCodingAgentInvoker` factory from
- * `@keni/role-runtimes/test-fakes`.
+ * by the registered runner. Each role package's `wire(input)` (e.g.
+ * `@keni/runtime-engineer`, `@keni/runtime-po`) builds an
+ * `AgentRunner` and `runServer` registers it via this registry; tests
+ * register a fake runner that wraps the `createFakeCodingAgentInvoker`
+ * factory from `@keni/runtime-common/test-fakes`.
  *
  * Registration is idempotent for the same `runner.role`: a second
  * `register` for the same role replaces the first and emits an
@@ -18,44 +18,11 @@
  * @module
  */
 
-import type {
-  BundledPrompt,
-  CodingAgentInvoker,
-  CyclePrepCtx,
-  McpServerConfig,
-  PrecheckResult,
-} from "@keni/role-runtimes";
+import type { AgentRunner } from "@keni/runtime-common";
 import type { Role } from "@keni/shared";
 import type { SchedulerLogger } from "./log.ts";
 
-/**
- * Role-specific bundle the scheduler hands to {@link startCycle} on each
- * proceed-precheck tick. Every field mirrors a `RoleCycleParams` field;
- * the scheduler injects `agentId`, `serverUrl`, `projectName`, and
- * `signal` per cycle.
- */
-export interface AgentRunner {
-  readonly role: Role;
-  readonly precheck: (ctx: CyclePrepCtx) => Promise<PrecheckResult> | PrecheckResult;
-  readonly promptResolver: (ctx: CyclePrepCtx) => BundledPrompt;
-  readonly expectedPromptName?: string;
-  readonly codingAgentInvoker: CodingAgentInvoker;
-  readonly envAllowlist?: readonly string[];
-  readonly mcpServerConfig: McpServerConfig;
-  /**
-   * Per-agent workspace path the scheduler SHALL forward as
-   * `RoleCycleParams.workspacePath`. When set, this wins over the
-   * project-level `SchedulerOpts.workspacePath` (a one-value-fits-all
-   * leftover that does not model per-agent workspaces correctly). The
-   * production engineer wiring populates this from
-   * `provisioner.workspacePathFor(projectId, agentId)`.
-   */
-  readonly workspacePath?: string;
-  /** Optional override of the cycle's idle threshold (default 250 ms). */
-  readonly idleThresholdMs?: number;
-  /** Optional override of the cycle's SIGTERM grace period (default 5 000 ms). */
-  readonly terminationGraceMs?: number;
-}
+export type { AgentRunner };
 
 /** Public surface of the registry. */
 export interface AgentRunnerRegistry {

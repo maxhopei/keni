@@ -41,12 +41,9 @@ import type {
   CodingAgentLifecycle,
   CodingAgentOutcome,
   CyclePrepCtx,
-} from "@keni/role-runtimes";
-import {
-  FakeWorkspaceProvisioner,
-  PLACEHOLDER_PROMPT_BODY,
-  PLACEHOLDER_PROMPT_NAME,
-} from "@keni/role-runtimes/test-fakes";
+} from "@keni/runtime-common";
+import { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "@keni/runtime-common/test-fakes";
+import { FakeWorkspaceProvisioner } from "@keni/runtime-workspace/test-fakes";
 import { runServer } from "../../../src/runServer.ts";
 import type { AgentRunner, AgentRunnerRegistry } from "../../../src/scheduler/registry.ts";
 import type { Scheduler } from "../../../src/scheduler/scheduler.ts";

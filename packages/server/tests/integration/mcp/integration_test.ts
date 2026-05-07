@@ -29,7 +29,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { join } from "@std/path";
 import { FileConfigStore, resolveGlobalPaths, resolveProjectPaths } from "@keni/shared";
-import { FakeWorkspaceProvisioner } from "@keni/role-runtimes/test-fakes";
+import { FakeWorkspaceProvisioner } from "@keni/runtime-workspace/test-fakes";
 import { runServer } from "../../../src/runServer.ts";
 
 const PROJECT_ID = "00000000-0000-4000-8000-0000000000aa";

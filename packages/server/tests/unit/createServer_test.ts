@@ -21,7 +21,7 @@ import {
   InMemoryTicketStore,
   type TicketListResponse,
 } from "@keni/shared";
-import { FakeWorkspaceProvisioner } from "@keni/role-runtimes/test-fakes";
+import { FakeWorkspaceProvisioner } from "@keni/runtime-workspace/test-fakes";
 import { createInMemoryAgentRuntimeStateStore } from "../../src/agentState.ts";
 import { captureBusBuffer, createInMemoryEventBus } from "../../src/eventBus.ts";
 import { createMutex } from "../../src/concurrency/mutex.ts";

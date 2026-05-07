@@ -39,7 +39,7 @@ import {
   PR_MERGED_ACTIVITY_EVENT,
   resolveProjectPaths,
 } from "@keni/shared";
-import type { WorkspaceProvisioner } from "@keni/role-runtimes";
+import type { WorkspaceProvisioner } from "@keni/runtime-workspace";
 import type { ActivityEntry } from "@keni/shared";
 
 /**
@@ -53,8 +53,8 @@ function fixedWorkspaceProvisioner(path: string): WorkspaceProvisioner {
     workspacePathFor(): string {
       return path;
     },
-    ensureProvisioned(): Promise<void> {
-      return Promise.resolve();
+    ensureProvisioned(): Promise<string> {
+      return Promise.resolve(path);
     },
     pullMain(): Promise<void> {
       return Promise.resolve();

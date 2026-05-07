@@ -257,9 +257,9 @@ agents:
 ```
 
 The closed list of supported CLI names lives in
-[`packages/role-runtimes/src/common/codingAgentCliRegistry.ts`](./packages/role-runtimes/src/common/codingAgentCliRegistry.ts);
+[`packages/runtime-common/src/codingAgentCliRegistry.ts`](./packages/runtime-common/src/codingAgentCliRegistry.ts);
 each entry's argv and MCP-config strategy ships in a single-purpose module under
-[`packages/role-runtimes/src/common/codingAgentClis/`](./packages/role-runtimes/src/common/codingAgentClis/).
+[`packages/runtime-common/src/codingAgentClis/`](./packages/runtime-common/src/codingAgentClis/).
 
 | Name           | Coverage    | Argv shape                                              | MCP config lands at                                                  |
 | -------------- | ----------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -326,40 +326,42 @@ mode) to exercise the surface.
 
 ### Role runtimes (common)
 
-`@keni/role-runtimes` exposes a deterministic seven-step cycle wrapper — `startCycle(params)` — that
-any role (engineer, QA, PO) plugs into by supplying a precheck function, a bundled prompt, an
+`@keni/runtime-common` exposes a deterministic seven-step cycle wrapper — `startCycle(params)` —
+that any role (engineer, QA, PO) plugs into by supplying a precheck function, a bundled prompt, an
 MCP-server config, and a `CodingAgentInvoker`. The cycle implements [`spec.md`](./spec.md) §6.2
 step-for-step: precheck → log `session_start` → resolve the bundled prompt → build the invocation →
 spawn and stream stdout/stderr per line → idle-detect → log `session_end` (or `idle`). The runtime
 returns a typed `RoleCycleResult` discriminated union covering five outcomes (`completed`, `idle`,
-`precheck_skipped`, `terminated`, `spawn_failed`) so callers — typically step 08's scheduler — can
+`precheck_skipped`, `terminated`, `spawn_failed`) so callers — typically the scheduler — can
 `switch` over a closed shape.
 
-The common cycle code lives in
-[`packages/role-runtimes/src/common/`](./packages/role-runtimes/src/common/). Four invariants are
-pinned by structural tests:
+The common cycle code lives in [`packages/runtime-common/src/`](./packages/runtime-common/src/).
+Four invariants are pinned by structural tests:
 
 1. **Single cycle per invocation.** No looping, no scheduling, no retry — that is the scheduler's
    job. Each call generates a fresh uuidv7 `session_id` and runs to completion exactly once.
 2. **Stateless across invocations.** No module-scope state survives between cycles; concurrent
    invocations against different agent ids are safe by construction.
-3. **Activity log only via `POST /activity`.** No source file under
-   `packages/role-runtimes/src/common/` reads or writes any path under `.keni/` or `~/.keni/`. The
-   typed activity-log adapter at `activityClient.ts` stamps `X-Keni-Role` and `X-Keni-Agent` on
-   every request.
+3. **Activity log only via `POST /activity`.** No source file under `packages/runtime-common/src/`
+   reads or writes any path under `.keni/` or `~/.keni/`. The typed activity-log adapter at
+   `activityClient.ts` stamps `X-Keni-Role` and `X-Keni-Agent` on every request.
 4. **Role-agnostic.** No `role === "engineer"` branches; every role-shaped concern (precheck,
-   prompt, env allowlist, MCP config) is a parameter on `RoleCycleParams`.
+   prompt, env allowlist, MCP config) is a parameter on `RoleCycleParams`. Per-role plug-in code
+   lives in sibling packages (`@keni/runtime-engineer`, `@keni/runtime-po`, …) that depend on
+   `@keni/runtime-common`; the dependency edge never reverses.
 
-Step 09 (engineer specialisation) is the first concrete consumer; step 17 (PO mode selection) will
-plug a four-mode arbiter into the precheck. Both inherit the cycle without modifying it.
+The engineer specialisation in `@keni/runtime-engineer` is the first concrete consumer; the PO stub
+in `@keni/runtime-po` is the second (proving the polymorphic plug-in model). Both inherit the cycle
+without modifying it.
 
 ### Engineer runtime
 
-The engineer specialisation lives at
-[`packages/role-runtimes/src/engineer/`](./packages/role-runtimes/src/engineer/) and slots into the
-common cycle as a single `AgentRunner` registered against the scheduler. Six invariants frame
-everything else; together they let an engineer agent mutate code without ever seeing the project's
-control plane:
+The engineer specialisation lives at [`packages/runtime-engineer/`](./packages/runtime-engineer/)
+and slots into the common cycle as a single `AgentRunner` registered against the scheduler via the
+polymorphic [`WireFn` plug-in protocol](./packages/runtime-common/src/wire.ts) (the CLI assembles
+`{ engineer: engineerWire, po: poWire, … }` and hands it to `runServer`; the orchestration server
+holds zero role-specific compile-time knowledge). Six invariants frame everything else; together
+they let an engineer agent mutate code without ever seeing the project's control plane:
 
 1. **Per-agent sparse-checkout workspace under the engineer's home dir.** Every engineer agent gets
    its own git clone parked at `<homeDir>/.keni/workspaces/<projectId>/<agentId>/`. The agent never
@@ -391,7 +393,7 @@ control plane:
    of racing. The engineer never touches the project repo and never runs `git push origin main`.
 
 The integration suite at
-[`packages/role-runtimes/src/engineer/integration_test.ts`](./packages/role-runtimes/src/engineer/integration_test.ts)
+[`packages/runtime-engineer/tests/integration/integration_test.ts`](./packages/runtime-engineer/tests/integration/integration_test.ts)
 boots `runServer` in-process against a real git working clone, asserts the workspace shape and
 identity invariants, drives a PR through `open → in_review → approved → merged` over real HTTP, and
 confirms `main` HEAD advances and the activity log gains a `pr_merged` entry. The non-fast-forward
@@ -451,7 +453,7 @@ exposes `POST /agents/:id/interrupt` as the user-facing seam onto `Scheduler.int
 The plug-in surface for roles is one interface:
 
 ```typescript
-import type { AgentRunner } from "@keni/server/scheduler/registry";
+import type { AgentRunner } from "@keni/runtime-common";
 
 const engineerRunner: AgentRunner = {
   role: "engineer",
@@ -465,7 +467,7 @@ scheduler.registerRunner(engineerRunner);
 ```
 
 Steps 09 and 17 land the production engineer and PO runners; the integration test at
-[`packages/server/src/scheduler/integration_test.ts`](./packages/server/src/scheduler/integration_test.ts)
+[`packages/server/tests/integration/scheduler/integration_test.ts`](./packages/server/tests/integration/scheduler/integration_test.ts)
 exercises the end-to-end flow against a fake runner today.
 
 ## Repository layout
@@ -505,7 +507,10 @@ keni/
     │           ├── prDetail/         # PRDetailView (intent editor, transition panel, merge button)
     │           ├── activityLog/      # ActivityLogView + formatActivityRefs
     │           └── shared/           # statusGraph (drift-checked mirror), testStubs
-    ├── role-runtimes/        # @keni/role-runtimes — common cycle wrapper plus per-role specialisations (engineer/QA/PO)
+    ├── runtime-common/       # @keni/runtime-common — cycle wrapper (`startCycle`), shared types, coding-agent invoker, CLI registry, `WireFn` protocol
+    ├── runtime-workspace/    # @keni/runtime-workspace — `WorkspaceProvisioner` interface + `GitWorkspaceProvisioner` (sparse-checkout, parameterised)
+    ├── runtime-engineer/     # @keni/runtime-engineer — engineer prompt, runner factory, MCP-config builder, sparse pattern, `wire` plug-in export
+    ├── runtime-po/           # @keni/runtime-po — PO role stub (proves the polymorphic role plug-in model with a permanent precheck-skip)
     └── shared/               # @keni/shared — types, storage interfaces, utilities
 ```
 
@@ -604,7 +609,7 @@ Once archived, the canonical references move to [`openspec/specs/spa-*/`](./open
 
 Per [`spec.md`](./spec.md) §11#3 and §6.2, every agent's system prompt is bundled with Keni's binary
 or Docker image. Prompts live as TypeScript string exports inside the package that owns them — for
-example, the engineer's prompt will live at `packages/role-runtimes/src/prompts/engineer.ts` as a
+example, the engineer's prompt lives at `packages/runtime-engineer/src/prompts/engineer.ts` as a
 named `export const` — and are imported by the role runtime like any other module.
 
 There is **no** top-level `prompts/` directory. No runtime reads a prompt from disk. This convention
@@ -664,12 +669,12 @@ Fire `Ctrl-C` (one `SIGINT`) when you're done — the documented graceful shutdo
 `Ctrl-C` short-circuits to exit `130`.
 
 The automated regression net for the boot path lives at
-[`packages/cli/src/start/start_e2e_test.ts`](./packages/cli/src/start/start_e2e_test.ts) and runs as
-part of `deno task test`. The automated test exercises the boot, `/health`, static-SPA serving, and
-graceful-shutdown wiring against an in-process `runStart` with stub deps — it does **not** drive a
-real engineer subprocess or a real coding agent. The manual runbook above is the user's exit
-criterion (does Keni actually deliver value end-to-end?); the automated test is Keni's own
-regression net (does the boot wiring keep working as we change it?). Both are required.
+[`packages/cli/tests/e2e/start/start_e2e_test.ts`](./packages/cli/tests/e2e/start/start_e2e_test.ts)
+and runs as part of `deno task test`. The automated test exercises the boot, `/health`, static-SPA
+serving, and graceful-shutdown wiring against an in-process `runStart` with stub deps — it does
+**not** drive a real engineer subprocess or a real coding agent. The manual runbook above is the
+user's exit criterion (does Keni actually deliver value end-to-end?); the automated test is Keni's
+own regression net (does the boot wiring keep working as we change it?). Both are required.
 
 ## License
 

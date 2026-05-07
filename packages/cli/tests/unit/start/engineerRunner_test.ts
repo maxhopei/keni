@@ -1,21 +1,27 @@
 /**
- * Pin the production `buildProductionEngineerRunnerFactory` resolution
- * rules (per-agent → global → null) and the documented
- * `engineer.runner_skipped` log contract.
+ * Pin the engineer `wire(input)` resolution rules (per-agent → global
+ * → null) and the documented `engineer.runner_skipped` log contract.
+ *
+ * Migrated to exercise the role-package's `wire` export directly per
+ * `split-role-runtimes-package` §9.3 — the previous
+ * `buildProductionEngineerRunnerFactory` helper from `cli/src/start/`
+ * is gone; the same scenarios now run against the polymorphic
+ * `WireFn` shape.
+ *
+ * @module
  */
 
 import { assert, assertEquals } from "@std/assert";
 import {
+  type ActivityHttpClient,
   type CodingAgentCliEntry,
   codingAgentCliRegistry,
-  type EngineerActivityHttpClient,
-  type WorkspaceLogger,
-  type WorkspaceLogLevel,
-} from "@keni/role-runtimes";
-import { FakeWorkspaceProvisioner } from "@keni/role-runtimes/test-fakes";
-import type { MakeEngineerRunnerInput } from "@keni/server";
+  type WireInput,
+} from "@keni/runtime-common";
+import { wire as engineerWire } from "@keni/runtime-engineer";
+import { FakeWorkspaceProvisioner } from "@keni/runtime-workspace/test-fakes";
+import type { WorkspaceLogger, WorkspaceLogLevel } from "@keni/runtime-workspace";
 import type { AgentConfig, ResolvedConfig, TicketFilter, TicketSummary } from "@keni/shared";
-import { buildProductionEngineerRunnerFactory } from "../../../src/start/engineerRunner.ts";
 
 interface CapturedLogEntry {
   readonly level: WorkspaceLogLevel;
@@ -31,25 +37,36 @@ function captureLogger(buffer: CapturedLogEntry[]): WorkspaceLogger {
   };
 }
 
-const stubActivityHttpClient: EngineerActivityHttpClient = {
+const stubActivityHttpClient: ActivityHttpClient = {
   listTickets: (_filter: TicketFilter): Promise<readonly TicketSummary[]> => {
     return Promise.resolve([]);
   },
 };
 
-function makeInput(agent: AgentConfig): MakeEngineerRunnerInput {
+interface MakeInputOpts {
+  readonly agent: AgentConfig;
+  readonly resolvedConfig: ResolvedConfig;
+  readonly registry: Readonly<Record<string, CodingAgentCliEntry>>;
+  readonly logger: WorkspaceLogger;
+  readonly provisioner?: FakeWorkspaceProvisioner;
+}
+
+function makeInput(opts: MakeInputOpts): WireInput {
   return {
     projectId: "p1",
     projectName: "demo",
-    agentConfig: agent,
-    serverUrl: "http://127.0.0.1:9999",
     projectRepoPath: "/tmp/demo-repo",
-    provisioner: new FakeWorkspaceProvisioner(),
-    // The engineer-runner factory does not actually use this logger
-    // (the helper passes its own dep-supplied logger to
-    // `createEngineerRunner`); the field is required by the input
-    // shape, so we satisfy it with a no-op sink.
-    logger: { log: () => {} },
+    serverUrl: "http://127.0.0.1:9999",
+    agentConfig: opts.agent,
+    resolvedConfig: opts.resolvedConfig,
+    mcpEntryPath: "/abs/mcp/main.ts",
+    logger: opts.logger,
+    makeActivityHttpClient: (
+      _serverUrl: string,
+      _agentId: string,
+    ): ActivityHttpClient => stubActivityHttpClient,
+    codingAgentCliRegistry: opts.registry,
+    workspaceProvisioner: opts.provisioner ?? new FakeWorkspaceProvisioner(),
   };
 }
 
@@ -57,38 +74,25 @@ const FAKE_REGISTRY: Readonly<Record<string, CodingAgentCliEntry>> = {
   ...codingAgentCliRegistry,
 };
 
-const HELPER_DEPS_BASE = {
-  registry: FAKE_REGISTRY,
-  mcpEntryPath: "/abs/mcp/main.ts",
-  makeActivityHttpClient: (
-    _serverUrl: string,
-    _agentId: string,
-  ): EngineerActivityHttpClient => stubActivityHttpClient,
-};
-
 Deno.test(
   "configured global coding_agent_cli registers a runner with the matching registry entry",
-  () => {
+  async () => {
     const log: CapturedLogEntry[] = [];
-    const resolvedConfig: ResolvedConfig = { coding_agent_cli: "claude" };
-    const factory = buildProductionEngineerRunnerFactory({
-      ...HELPER_DEPS_BASE,
-      resolvedConfig,
+    const provisioner = new FakeWorkspaceProvisioner();
+    const input = makeInput({
+      agent: { id: "alice", role: "engineer" },
+      resolvedConfig: { coding_agent_cli: "claude" },
+      registry: FAKE_REGISTRY,
       logger: captureLogger(log),
+      provisioner,
     });
 
-    const input = makeInput({ id: "alice", role: "engineer" });
-    const runner = factory(input);
+    const runner = await engineerWire(input);
     assert(runner !== null, "expected a registered engineer runner");
     assertEquals(runner.role, "engineer");
-    // The production helper MUST forward the per-agent workspace path
-    // onto the runner bag — the scheduler reads this off the runner to
-    // build `RoleCycleParams.workspacePath`, which the workspace-rooted
-    // MCP-config strategies (`workspace-json` / `workspace-toml`) require
-    // to materialise their config files.
     assertEquals(
       runner.workspacePath,
-      input.provisioner.workspacePathFor(input.projectId, input.agentConfig.id),
+      provisioner.workspacePathFor(input.projectId, input.agentConfig.id),
     );
     assertEquals(
       log.length,
@@ -98,21 +102,15 @@ Deno.test(
   },
 );
 
-Deno.test("per-agent cli wins over the global coding_agent_cli", () => {
+Deno.test("per-agent cli wins over the global coding_agent_cli", async () => {
   const log: CapturedLogEntry[] = [];
-  const resolvedConfig: ResolvedConfig = { coding_agent_cli: "claude" };
-  const factory = buildProductionEngineerRunnerFactory({
-    ...HELPER_DEPS_BASE,
-    resolvedConfig,
-    logger: captureLogger(log),
-  });
-
-  // No public way to introspect the constructed invoker's bound
-  // cliBinary from outside the helper, so we exercise the resolution
-  // path via the unknown-cli branch: setting a per-agent override to a
-  // value not in the registry forces the unknown-cli warn.
-  const runner = factory(
-    makeInput({ id: "bob", role: "engineer", cli: "homebrew-toy" }),
+  const runner = await engineerWire(
+    makeInput({
+      agent: { id: "bob", role: "engineer", cli: "homebrew-toy" },
+      resolvedConfig: { coding_agent_cli: "claude" },
+      registry: FAKE_REGISTRY,
+      logger: captureLogger(log),
+    }),
   );
   assertEquals(runner, null, "unknown per-agent cli must skip");
   assertEquals(log.length, 1);
@@ -125,16 +123,16 @@ Deno.test("per-agent cli wins over the global coding_agent_cli", () => {
 
 Deno.test(
   "no CLI configured anywhere logs engineer.runner_skipped with reason no_cli_configured and returns null",
-  () => {
+  async () => {
     const log: CapturedLogEntry[] = [];
-    const resolvedConfig: ResolvedConfig = {};
-    const factory = buildProductionEngineerRunnerFactory({
-      ...HELPER_DEPS_BASE,
-      resolvedConfig,
-      logger: captureLogger(log),
-    });
-
-    const runner = factory(makeInput({ id: "alice", role: "engineer" }));
+    const runner = await engineerWire(
+      makeInput({
+        agent: { id: "alice", role: "engineer" },
+        resolvedConfig: {},
+        registry: FAKE_REGISTRY,
+        logger: captureLogger(log),
+      }),
+    );
     assertEquals(runner, null);
     assertEquals(log.length, 1);
     const entry = log[0]!;
@@ -153,16 +151,16 @@ Deno.test(
 
 Deno.test(
   "an unknown global coding_agent_cli logs engineer.runner_skipped with reason unknown_cli",
-  () => {
+  async () => {
     const log: CapturedLogEntry[] = [];
-    const resolvedConfig: ResolvedConfig = { coding_agent_cli: "claud" };
-    const factory = buildProductionEngineerRunnerFactory({
-      ...HELPER_DEPS_BASE,
-      resolvedConfig,
-      logger: captureLogger(log),
-    });
-
-    const runner = factory(makeInput({ id: "alice", role: "engineer" }));
+    const runner = await engineerWire(
+      makeInput({
+        agent: { id: "alice", role: "engineer" },
+        resolvedConfig: { coding_agent_cli: "claud" },
+        registry: FAKE_REGISTRY,
+        logger: captureLogger(log),
+      }),
+    );
     assertEquals(runner, null);
     assertEquals(log.length, 1);
     const entry = log[0]!;
@@ -175,18 +173,26 @@ Deno.test(
 
 Deno.test(
   "two engineers with mixed configs: one registers, one skips, both outcomes happen in the same boot",
-  () => {
+  async () => {
     const log: CapturedLogEntry[] = [];
     const resolvedConfig: ResolvedConfig = { coding_agent_cli: "claude" };
-    const factory = buildProductionEngineerRunnerFactory({
-      ...HELPER_DEPS_BASE,
-      resolvedConfig,
-      logger: captureLogger(log),
-    });
+    const baseLogger = captureLogger(log);
 
-    const aliceRunner = factory(makeInput({ id: "alice", role: "engineer" }));
-    const bobRunner = factory(
-      makeInput({ id: "bob", role: "engineer", cli: "homebrew-toy" }),
+    const aliceRunner = await engineerWire(
+      makeInput({
+        agent: { id: "alice", role: "engineer" },
+        resolvedConfig,
+        registry: FAKE_REGISTRY,
+        logger: baseLogger,
+      }),
+    );
+    const bobRunner = await engineerWire(
+      makeInput({
+        agent: { id: "bob", role: "engineer", cli: "homebrew-toy" },
+        resolvedConfig,
+        registry: FAKE_REGISTRY,
+        logger: baseLogger,
+      }),
     );
 
     assert(aliceRunner !== null, "alice should register against the global claude");
@@ -198,32 +204,37 @@ Deno.test(
   },
 );
 
-Deno.test("the helper's closure does not throw on any documented input shape", () => {
+Deno.test("the wire does not throw on any documented input shape", async () => {
   const log: CapturedLogEntry[] = [];
-  const factory = buildProductionEngineerRunnerFactory({
-    ...HELPER_DEPS_BASE,
-    resolvedConfig: { coding_agent_cli: "claude" },
-    logger: captureLogger(log),
-  });
+  const baseLogger = captureLogger(log);
 
   // Empty per-agent cli string is treated as absent (falls through to
   // global).
-  const r1 = factory(makeInput({ id: "a", role: "engineer", cli: "" }));
+  const r1 = await engineerWire(
+    makeInput({
+      agent: { id: "a", role: "engineer", cli: "" },
+      resolvedConfig: { coding_agent_cli: "claude" },
+      registry: FAKE_REGISTRY,
+      logger: baseLogger,
+    }),
+  );
   assert(r1 !== null);
 
-  // Non-engineer role still goes through the resolution path; the
-  // helper does not gate on `role` (the scheduler only consumes
-  // engineer registrations, but the helper itself is role-agnostic at
-  // this layer).
-  const r2 = factory(makeInput({ id: "b", role: "engineer", cli: "claude" }));
+  // Per-agent cli wins.
+  const r2 = await engineerWire(
+    makeInput({
+      agent: { id: "b", role: "engineer", cli: "claude" },
+      resolvedConfig: { coding_agent_cli: "claude" },
+      registry: FAKE_REGISTRY,
+      logger: baseLogger,
+    }),
+  );
   assert(r2 !== null);
-
-  // No throws expected.
 });
 
 Deno.test(
-  "an extended registry (test override) is honoured by the helper",
-  () => {
+  "an extended registry (test override) is honoured by the wire",
+  async () => {
     const log: CapturedLogEntry[] = [];
     const fixtureEntry: CodingAgentCliEntry = {
       cliBinary: "fake",
@@ -237,15 +248,14 @@ Deno.test(
       ...codingAgentCliRegistry,
       "fake-coding-agent": fixtureEntry,
     };
-    const factory = buildProductionEngineerRunnerFactory({
-      registry: extended,
-      mcpEntryPath: "/abs/mcp/main.ts",
-      makeActivityHttpClient: () => stubActivityHttpClient,
-      resolvedConfig: { coding_agent_cli: "fake-coding-agent" },
-      logger: captureLogger(log),
-    });
-
-    const runner = factory(makeInput({ id: "alice", role: "engineer" }));
+    const runner = await engineerWire(
+      makeInput({
+        agent: { id: "alice", role: "engineer" },
+        resolvedConfig: { coding_agent_cli: "fake-coding-agent" },
+        registry: extended,
+        logger: captureLogger(log),
+      }),
+    );
     assert(runner !== null, "the fixture entry should resolve");
     assertEquals(log.length, 0);
   },

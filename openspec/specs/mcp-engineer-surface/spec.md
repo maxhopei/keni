@@ -145,6 +145,8 @@ Each tool's `description` SHALL be a single literal string in the source code (n
 
 `packages/server/src/mcp/httpClient.ts` SHALL export `createMcpHttpClient(opts: { serverUrl: string; agentId: string }): McpHttpClient` returning an object with one method per delegated endpoint: `listTickets(filter)`, `readTicket(id)`, `updateTicketBody(id, body)`, `transitionTicket(id, from, to)`, `appendActivity(input)`, `queryActivity(filter, limit)`, **and `mergePr(prId): Promise<{ merge_commit_sha: string }>`**. Each method SHALL: (1) compose the URL using `URLSearchParams` for query strings; (2) set `Content-Type: application/json` for write methods (the `mergePr` method's request body is empty so `Content-Type` MAY be omitted); (3) set `X-Keni-Role: engineer` and `X-Keni-Agent: <agentId>`; (4) issue `await fetch(...)`; (5) on a 2xx response, parse the `{ data, project_id }` envelope and return `data`; (6) on a non-2xx response, parse the `{ error: { code, message, details? } }` envelope and throw `new McpHttpError(code, message, details, status)`; (7) on a network-level rejection (`fetch` rejects, e.g. ECONNREFUSED), throw `new McpHttpError("internal_error", `Network error talking to ${url}: ${cause.message}`, ..., 0)`. No method SHALL read or write any path under `.keni/` directly; every state-changing operation flows through the orchestration-server REST endpoint that owns it.
 
+The engineer's workspace path (used by tools or handlers that need to know where the engineer's clone lives, e.g., for the merge-PR fast-forward) SHALL be resolved via the `WorkspaceProvisioner` interface imported from `@keni/runtime-workspace` (not from `@keni/role-runtimes` or `@keni/runtime-engineer`).
+
 #### Scenario: A successful response is unwrapped from the envelope
 
 - **WHEN** `httpClient.listTickets({})` is called
@@ -186,6 +188,13 @@ Each tool's `description` SHALL be a single literal string in the source code (n
 
 - **WHEN** the source code under `packages/server/src/mcp/` is grepped for `Deno.readTextFile`, `Deno.writeTextFile`, `Deno.readFile`, `Deno.writeFile`, or any path beginning with `.keni/`
 - **THEN** no occurrence is found in any tool handler or HTTP-client method (test files MAY use `Deno.stat` against the workspace path passed via `--workspace`, which is itself outside `.keni/`)
+
+#### Scenario: `WorkspaceProvisioner` is imported from `@keni/runtime-workspace`
+
+- **WHEN** the production source files of `@keni/server`'s MCP-tool handlers and PR-merge route are scanned for `WorkspaceProvisioner` imports
+- **THEN** every matched import statement uses the specifier `@keni/runtime-workspace`
+- **AND** zero matches use the legacy `@keni/role-runtimes` specifier
+- **AND** zero matches use `@keni/runtime-engineer`
 
 ### Requirement: `list_tickets`, `read_ticket`, `update_ticket_body`, `transition_ticket_status` cover the engineer's ticket surface end-to-end
 

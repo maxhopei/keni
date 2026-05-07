@@ -48,7 +48,7 @@ import type {
   CodingAgentOutcome,
   RoleCycleParams,
   RoleCycleResult,
-} from "@keni/role-runtimes";
+} from "@keni/runtime-common";
 import { createInMemoryAgentRuntimeStateStore } from "../../../src/agentState.ts";
 import { createFakeClock, type FakeClockHandle } from "../../fakes/scheduler/fakeClock.ts";
 import { captureSchedulerLogger, type SchedulerLogEntry } from "../../../src/scheduler/log.ts";
@@ -490,7 +490,7 @@ Deno.test("scheduler — proceed precheck invokes startCycle with registered run
     registry.register(runner);
 
     const startCycleCalls: RoleCycleParams[] = [];
-    const fakeStartCycle: typeof import("@keni/role-runtimes").startCycle = (
+    const fakeStartCycle: typeof import("@keni/runtime-common").startCycle = (
       params,
     ): Promise<RoleCycleResult> => {
       startCycleCalls.push(params);
@@ -562,7 +562,7 @@ Deno.test(
       );
 
       const startCycleCalls: RoleCycleParams[] = [];
-      const fakeStartCycle: typeof import("@keni/role-runtimes").startCycle = (
+      const fakeStartCycle: typeof import("@keni/runtime-common").startCycle = (
         params,
       ): Promise<RoleCycleResult> => {
         startCycleCalls.push(params);
@@ -622,7 +622,7 @@ Deno.test(
       );
 
       const startCycleCalls: RoleCycleParams[] = [];
-      const fakeStartCycle: typeof import("@keni/role-runtimes").startCycle = (
+      const fakeStartCycle: typeof import("@keni/runtime-common").startCycle = (
         params,
       ): Promise<RoleCycleResult> => {
         startCycleCalls.push(params);

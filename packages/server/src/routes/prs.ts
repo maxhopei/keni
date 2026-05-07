@@ -40,7 +40,7 @@ import {
 } from "../wire/prs.ts";
 import type { ServerVariables } from "../middleware/types.ts";
 import type { Mutex } from "../concurrency/mutex.ts";
-import type { WorkspaceProvisioner } from "@keni/role-runtimes";
+import type { WorkspaceProvisioner } from "@keni/runtime-workspace";
 
 /** Roles authorised to create a PR (engineer-only authorial flow; user may override). */
 const PR_CREATE_OWNERS: readonly Role[] = ["engineer", "user"];

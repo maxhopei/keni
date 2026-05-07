@@ -24,18 +24,24 @@ lives in [`README.md`](./README.md).
 
 ## Workspace layout
 
-Single Deno workspace declared in [`deno.json`](./deno.json) with five members:
+Single Deno workspace declared in [`deno.json`](./deno.json) with eight members:
 
-| Package                                            | Purpose                                                                                             |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [`@keni/cli`](./packages/cli/)                     | The `keni` command — `init`, `start`                                                                |
-| [`@keni/server`](./packages/server/)               | Orchestration server (REST + WS), engineer MCP server (stdio), in-process scheduler                 |
-| [`@keni/role-runtimes`](./packages/role-runtimes/) | Common role cycle wrapper + per-role specialisations (engineer today, QA/PO next)                   |
-| [`@keni/shared`](./packages/shared/)               | Wire types, storage interfaces (`TicketStore`, `PRStore`, `ActivityLogStore`, `ConfigStore`), utils |
-| [`@keni/spa`](./packages/spa/)                     | Browser dashboard                                                                                   |
+| Package                                                    | Purpose                                                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| [`@keni/cli`](./packages/cli/)                             | The `keni` command — `init`, `start`                                                                |
+| [`@keni/server`](./packages/server/)                       | Role-agnostic orchestration server (REST + WS), engineer MCP server (stdio), in-process scheduler   |
+| [`@keni/runtime-common`](./packages/runtime-common/)       | Cycle wrapper (`startCycle`), shared types, coding-agent invoker, CLI registry, `WireFn` protocol   |
+| [`@keni/runtime-workspace`](./packages/runtime-workspace/) | `WorkspaceProvisioner` interface + `GitWorkspaceProvisioner` (sparse-checkout, parameterised)       |
+| [`@keni/runtime-engineer`](./packages/runtime-engineer/)   | Engineer prompt, runner factory, MCP-config builder, sparse pattern, `wire` plug-in export          |
+| [`@keni/runtime-po`](./packages/runtime-po/)               | PO role stub — proves the polymorphic role plug-in model with a permanent precheck-skip             |
+| [`@keni/shared`](./packages/shared/)                       | Wire types, storage interfaces (`TicketStore`, `PRStore`, `ActivityLogStore`, `ConfigStore`), utils |
+| [`@keni/spa`](./packages/spa/)                             | Browser dashboard                                                                                   |
 
 Per-package READMEs (where present) carry the load-bearing detail:
-[`packages/role-runtimes/README.md`](./packages/role-runtimes/README.md),
+[`packages/runtime-common/README.md`](./packages/runtime-common/README.md),
+[`packages/runtime-workspace/README.md`](./packages/runtime-workspace/README.md),
+[`packages/runtime-engineer/README.md`](./packages/runtime-engineer/README.md),
+[`packages/runtime-po/README.md`](./packages/runtime-po/README.md),
 [`packages/shared/src/storage/README.md`](./packages/shared/src/storage/README.md).
 
 ## Common tasks (run from repo root)
@@ -73,7 +79,8 @@ Capability specs in [`openspec/specs/`](./openspec/specs/) are normative — whe
 disagree, the spec wins until a delta says otherwise. The capabilities currently archived include:
 
 - `cli-start`, `orchestration-server`, `scheduler`, `interrupt-and-timeout-ux`
-- `role-runtime`, `engineer-runtime`, `engineer-prompt`, `mcp-engineer-surface`
+- `runtime-common`, `runtime-workspace`, `runtime-engineer`, `runtime-po-stub`,
+  `engineer-prompt`, `mcp-engineer-surface`
 - `storage`, `project-layout`, `developer-setup`
 - `spa-shell`, `spa-agent-roster`, `spa-board`, `spa-ticket-detail`, `spa-pr-detail`,
   `spa-activity-log`
@@ -88,7 +95,7 @@ structural tests.
 
 1. **Prompts are code, not files.** No top-level `prompts/` directory. Every agent system prompt
    lives as a TypeScript `export const` inside the package that owns it (e.g.
-   [`packages/role-runtimes/src/engineer/prompts/engineer.ts`](./packages/role-runtimes/src/engineer/prompts/engineer.ts)).
+   [`packages/runtime-engineer/src/prompts/engineer.ts`](./packages/runtime-engineer/src/prompts/engineer.ts)).
    No runtime reads a prompt from disk. (`spec.md` §11#3, §6.2.)
 2. **Storage is interface-bound.** Tickets, PRs, activity log, and config are accessed only via the
    four storage interfaces in [`@keni/shared`](./packages/shared/src/storage/). Concrete adapters
@@ -107,7 +114,10 @@ structural tests.
 6. **Engineer workspaces are sparse-checkouts under `~/.keni/workspaces/<projectId>/<agentId>/`.**
    `.keni/` is sparse-excluded so engineer agents cannot read tickets/PRs/config directly — the MCP
    tool surface is the only seam. Per-workspace local git identity; the host's `~/.gitconfig` is
-   never read or written. (Capability spec: `engineer-runtime`.)
+   never read or written. The `WorkspaceProvisioner` interface lives in
+   [`@keni/runtime-workspace`](./packages/runtime-workspace/) and accepts a `sparseCheckoutPattern`
+   per call so other roles (QA, PO, writer) can compose their own patterns. (Capability specs:
+   `engineer-runtime`, `runtime-workspace`.)
 7. **Tests live under `packages/<pkg>/tests/`, never under `packages/<pkg>/src/`.** Each package
    carries a `tests/{unit,integration,e2e}/` tree; cross-package fakes are exposed via the
    `./test-fakes` secondary entry point on the package's `deno.json`. A structural test in
@@ -140,7 +150,7 @@ contract.
 | How do I run / develop locally?       | [`README.md`](./README.md) "Getting started"                                  |
 | What's the contract for capability X? | [`openspec/specs/<X>/spec.md`](./openspec/specs/)                             |
 | What's currently being built?         | [`openspec/changes/`](./openspec/changes/) (non-archive subfolders)           |
-| How does the engineer cycle work?     | `role-runtime` + `engineer-runtime` specs; `packages/role-runtimes/README.md` |
+| How does the engineer cycle work?     | `runtime-common` + `runtime-engineer` specs; `packages/runtime-engineer/README.md` |
 | How do storage interfaces compose?    | `storage` spec; `packages/shared/src/storage/README.md`                       |
 | How does `keni start` boot?           | `cli-start` + `orchestration-server` specs                                    |
 | What does the SPA do?                 | `spa-*` specs; [`packages/spa/`](./packages/spa/)                             |

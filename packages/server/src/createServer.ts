@@ -46,7 +46,7 @@ import { healthRoute } from "./routes/health.ts";
 import { prsRoutes } from "./routes/prs.ts";
 import { mountStaticSpa, validateStaticAssetsRoot } from "./routes/static.ts";
 import { ticketsRoutes } from "./routes/tickets.ts";
-import type { WorkspaceProvisioner } from "@keni/role-runtimes";
+import type { WorkspaceProvisioner } from "@keni/runtime-workspace";
 
 /**
  * Storage and sink dependencies for the orchestration server. The

@@ -16,17 +16,33 @@
  *     does not register a no-op test).
  *
  * Also asserts that every package has a `tests/` directory — the
- * five-package "every-package-contributes-a-test" floor still holds.
+ * eight-package "every-package-contributes-a-test" floor still holds.
+ *
+ * The `split-role-runtimes-package` change replaced the legacy
+ * monolithic role-runtime package with four granular siblings
+ * (`runtime-common`, `runtime-workspace`, `runtime-engineer`,
+ * `runtime-po`); the workspace-membership test below pins the eight
+ * documented members and SHALL fail loudly if `packages/role-runtimes/`
+ * is ever re-introduced.
  *
  * @module
  */
 
-import { assert } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { walk } from "@std/fs";
 import { fromFileUrl, join, relative } from "@std/path";
 
 const REPO_ROOT = fromFileUrl(new URL("../../../../", import.meta.url));
-const PACKAGES = ["cli", "server", "spa", "role-runtimes", "shared"] as const;
+const PACKAGES = [
+  "cli",
+  "server",
+  "spa",
+  "runtime-common",
+  "runtime-workspace",
+  "runtime-engineer",
+  "runtime-po",
+  "shared",
+] as const;
 
 const FORBIDDEN_DIR_NAMES = new Set([
   "fakes",
@@ -155,5 +171,81 @@ Deno.test("repo layout — every workspace package has a tests/ directory", asyn
   assert(
     missing.length === 0,
     `expected every package to have a tests/ directory; missing for: ${missing.join(", ")}`,
+  );
+});
+
+/**
+ * `split-role-runtimes-package` §11.6 — pin the workspace's eight
+ * documented members. The test reads the root `deno.json` directly
+ * (via JSON parse, not import-assert, to avoid a static-analysis
+ * dependency edge into the repo root) and compares the `workspace`
+ * array to {@link PACKAGES} verbatim. Drift in either direction —
+ * adding a member without registering it here, or removing a member
+ * without updating the consumer-side documentation — fails loudly.
+ */
+Deno.test("repo layout — workspace deno.json lists exactly the eight documented members", async () => {
+  const denoJsonPath = join(REPO_ROOT, "deno.json");
+  const raw = await Deno.readTextFile(denoJsonPath);
+  const parsed = JSON.parse(raw) as { readonly workspace?: readonly string[] };
+  const members = parsed.workspace ?? [];
+  const expected = PACKAGES.map((p) => `./packages/${p}`);
+  assertEquals(
+    [...members].sort(),
+    [...expected].sort(),
+    `workspace members drifted from PACKAGES; deno.json lists ${
+      JSON.stringify(members)
+    }, expected ${JSON.stringify(expected)}`,
+  );
+});
+
+/**
+ * `split-role-runtimes-package` §11.2 / §11.6 — the legacy
+ * `packages/role-runtimes/` directory was deleted as part of the
+ * granular-split atomic flip. This test is a tripwire that fires if
+ * the directory is ever re-introduced (intentionally or by a stale
+ * branch merge).
+ */
+Deno.test("repo layout — packages/role-runtimes/ does not exist", async () => {
+  const legacyPath = join(REPO_ROOT, "packages", "role-runtimes");
+  let exists = false;
+  try {
+    const stat = await Deno.stat(legacyPath);
+    exists = stat.isDirectory || stat.isFile;
+  } catch (e) {
+    if (!(e instanceof Deno.errors.NotFound)) throw e;
+  }
+  assertEquals(
+    exists,
+    false,
+    `expected packages/role-runtimes/ to be absent (the split-role-runtimes-package change deleted it); found something at ${legacyPath}`,
+  );
+});
+
+/**
+ * `split-role-runtimes-package` §11.6 — every package's `deno.json`
+ * SHALL declare a `name` field that matches its directory under
+ * `@keni/<dir>`. This catches accidental rename-without-rewire bugs.
+ */
+Deno.test("repo layout — every package's deno.json `name` matches its directory", async () => {
+  const mismatches: string[] = [];
+  for (const pkg of PACKAGES) {
+    const denoJsonPath = join(REPO_ROOT, "packages", pkg, "deno.json");
+    let raw: string;
+    try {
+      raw = await Deno.readTextFile(denoJsonPath);
+    } catch {
+      mismatches.push(`${pkg}: missing packages/${pkg}/deno.json`);
+      continue;
+    }
+    const parsed = JSON.parse(raw) as { readonly name?: string };
+    const expected = `@keni/${pkg}`;
+    if (parsed.name !== expected) {
+      mismatches.push(`${pkg}: name=${JSON.stringify(parsed.name)}, expected ${expected}`);
+    }
+  }
+  assertEquals(
+    mismatches,
+    [],
+    `package deno.json name drift detected:\n  ${mismatches.join("\n  ")}`,
   );
 });

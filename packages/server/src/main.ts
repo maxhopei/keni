@@ -25,7 +25,7 @@ export { startServer } from "./startServer.ts";
 export type { StartedServer, StartServerOptions } from "./startServer.ts";
 
 export { parseRunServerArgs, runServer, UsageError } from "./runServer.ts";
-export type { MakeEngineerRunnerInput, RunServerArgs, RunServerDeps } from "./runServer.ts";
+export type { RunServerArgs, RunServerDeps } from "./runServer.ts";
 
 export type { AgentRunner, AgentRunnerRegistry } from "./scheduler/registry.ts";
 

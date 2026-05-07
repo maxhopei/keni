@@ -34,22 +34,29 @@ import type {
   ConfigStore,
   ProjectPaths,
   PRStore,
+  ResolvedConfig,
   TicketStore,
 } from "@keni/shared";
 import { resolve } from "@std/path";
+import type {
+  ActivityHttpClient,
+  AgentRunner,
+  CodingAgentCliEntry,
+  WireFn,
+  WireInput,
+} from "@keni/runtime-common";
+import { codingAgentCliRegistry as defaultCodingAgentCliRegistry } from "@keni/runtime-common";
 import { createInMemoryAgentRuntimeStateStore } from "./agentState.ts";
 import type { ServerDeps } from "./createServer.ts";
 import { createInMemoryEventBus } from "./eventBus.ts";
 import { createMutex, type Mutex } from "./concurrency/mutex.ts";
+import { createMcpHttpClient } from "./mcp/main.ts";
+import { MCP_ENTRY_PATH } from "./mcpEntryPath.ts";
 import { stdoutLogSink } from "./middleware/requestLog.ts";
 import type { LogSink } from "./middleware/types.ts";
 import { defaultClock } from "./scheduler/clock.ts";
 import { consoleSchedulerLogger, type SchedulerLogger } from "./scheduler/log.ts";
-import {
-  type AgentRunner,
-  type AgentRunnerRegistry,
-  createAgentRunnerRegistry,
-} from "./scheduler/registry.ts";
+import { type AgentRunnerRegistry, createAgentRunnerRegistry } from "./scheduler/registry.ts";
 import {
   createScheduler,
   type Scheduler,
@@ -61,8 +68,7 @@ import {
   GitWorkspaceProvisioner,
   type WorkspaceLogger,
   type WorkspaceProvisioner,
-  WorkspaceProvisioningError,
-} from "@keni/role-runtimes";
+} from "@keni/runtime-workspace";
 
 /** Parsed CLI flags for `runServer`. */
 export interface RunServerArgs {
@@ -134,7 +140,7 @@ export interface RunServerDeps {
    * Override the {@link WorkspaceProvisioner}. Defaults to
    * `new GitWorkspaceProvisioner({ homeDir, logger: workspaceLoggerOf(schedulerLogger) })`.
    * Tests pass a `FakeWorkspaceProvisioner` (imported from
-   * `@keni/role-runtimes/test-fakes`) to assert on `ensureProvisioned` /
+   * `@keni/runtime-workspace/test-fakes`) to assert on `ensureProvisioned` /
    * `pullMain` / `discardProvisioned` calls without touching git or the
    * filesystem.
    */
@@ -147,25 +153,46 @@ export interface RunServerDeps {
    */
   readonly mergeMutex?: Mutex;
   /**
-   * Build the engineer's `AgentRunner` for `agentConfig`. When omitted,
-   * `runServer` skips engineer-runner registration; the merge endpoint,
-   * ticket REST, MCP server, and provisioner all still wire up, and
-   * the scheduler logs `runner.missing` on engineer ticks until a
-   * runner is registered.
+   * Polymorphic per-role plug-in registry. The CLI's composition root
+   * assembles `{ engineer: engineerWire, po: poWire, ... }` from each
+   * role package's `wire` export and hands it through here. `runServer`
+   * iterates the project's roster and dispatches
+   * `await roleWires[agent.role]?.(input)` per agent (insertion order).
+   * A non-`null` `AgentRunner` return is registered with the scheduler;
+   * a `null` return is logged and skipped; a thrown error fails boot
+   * with exit code 1. When `roleWires` is undefined or empty, the
+   * scheduler runs with zero registered runners and the per-tick
+   * `runner.missing` line fires for every roster entry.
    *
-   * Production callers (i.e. `keni start`) wire this via
-   * `buildProductionEngineerRunnerFactory(...)` from
-   * `packages/cli/src/start/engineerRunner.ts` — that helper resolves
-   * each agent's `coding_agent_cli`, looks it up in the closed
-   * `codingAgentCliRegistry` from `@keni/role-runtimes`, and either
-   * returns a fully-constructed `EngineerAgentRunner` or logs
-   * `engineer.runner_skipped` and returns `null`. Tests pass a stub
-   * returning a deterministic runner so the wiring sequence can be
-   * observed without launching real subprocesses.
-   *
-   * @returns an `AgentRunner` to register, or `null` to skip this engineer.
+   * Replaces the legacy `makeEngineerRunner` seam: the orchestration
+   * server holds zero role-specific compile-time knowledge.
    */
-  readonly makeEngineerRunner?: (input: MakeEngineerRunnerInput) => AgentRunner | null;
+  readonly roleWires?: Readonly<Record<string, WireFn>>;
+  /**
+   * Filesystem path the role wires hand to `mcpServerConfig` builders
+   * as the first positional arg of `deno run -A <path> ...`. Defaults
+   * to {@link MCP_ENTRY_PATH}. E2E tests override this to point at a
+   * fake stub.
+   */
+  readonly mcpEntryPath?: string;
+  /**
+   * Factory used by role wires to construct an `ActivityHttpClient`
+   * instance per agent (the engineer's runner consumes this for
+   * pull/in-flight ticket queries). Defaults to a closure over
+   * {@link createMcpHttpClient}; tests pass a stub to avoid real HTTP.
+   */
+  readonly makeActivityHttpClient?: (
+    serverUrl: string,
+    agentId: string,
+  ) => ActivityHttpClient;
+  /**
+   * Coding-agent CLI registry handed to role wires via
+   * `WireInput.codingAgentCliRegistry`. Defaults to the canonical
+   * `codingAgentCliRegistry` from `@keni/runtime-common`. The CLI's
+   * e2e tests merge in a fixture entry for the fake-coding-agent
+   * subprocess.
+   */
+  readonly codingAgentCliRegistry?: Readonly<Record<string, CodingAgentCliEntry>>;
   /**
    * Optional absolute path to the SPA's production bundle. When supplied,
    * `runServer` forwards it through `ServerDeps.staticAssetsRoot` so the
@@ -197,17 +224,6 @@ export interface RunServerDeps {
     deps: ServerDeps,
     opts: StartServerOptions,
   ) => Promise<StartedServer>;
-}
-
-/** Input bag handed to {@link RunServerDeps.makeEngineerRunner}. */
-export interface MakeEngineerRunnerInput {
-  readonly projectId: string;
-  readonly projectName: string;
-  readonly agentConfig: AgentConfig;
-  readonly serverUrl: string;
-  readonly projectRepoPath: string;
-  readonly provisioner: WorkspaceProvisioner;
-  readonly logger: SchedulerLogger;
 }
 
 /**
@@ -318,6 +334,7 @@ export async function runServer(
   let roster: readonly AgentConfig[];
   let schedules: Readonly<Record<string, string>> | undefined;
   let timeouts: Readonly<Record<string, string | number>> | undefined;
+  let resolvedConfig: ResolvedConfig;
   try {
     const config = await stores.configStore.readProjectConfig();
     projectId = config.project_id;
@@ -325,6 +342,7 @@ export async function runServer(
     roster = config.agents ?? [];
     schedules = config.schedules;
     timeouts = config.timeouts;
+    resolvedConfig = await stores.configStore.resolve();
   } catch (e) {
     if (e instanceof StoreNotFoundError) {
       err(
@@ -395,31 +413,32 @@ export async function runServer(
   // dispatches requests serially per connection so there is no race.
   (serverDeps as { serverStartedAt?: Date }).serverStartedAt = new Date();
 
-  const engineers = roster.filter((a) => a.role === "engineer");
-  if (engineers.length > 0) {
-    try {
-      await wireEngineers({
-        engineers,
-        projectId,
-        projectName,
-        provisioner,
-        projectRepoPath: parsed.projectDir,
-        serverUrl: serverHandle.url,
-        registry,
-        schedulerLogger,
-        ...(deps.makeEngineerRunner !== undefined
-          ? { makeEngineerRunner: deps.makeEngineerRunner }
-          : {}),
-      });
-    } catch (e) {
-      const failure = e as EngineerWiringFailure;
-      err(
-        `Failed to provision workspace for engineer ${failure.agentId}: ` +
-          `${failure.code} (${failure.cause})`,
-      );
-      await serverHandle.abort();
-      return 1;
-    }
+  const roleWires = deps.roleWires ?? {};
+  const wireInputDefaults: WireInputDefaults = {
+    mcpEntryPath: deps.mcpEntryPath ?? MCP_ENTRY_PATH,
+    makeActivityHttpClient: deps.makeActivityHttpClient ?? defaultMakeActivityHttpClient,
+    codingAgentCliRegistry: deps.codingAgentCliRegistry ?? defaultCodingAgentCliRegistry,
+  };
+  try {
+    await wireRoles({
+      roster,
+      roleWires,
+      projectId,
+      projectName,
+      projectRepoPath: parsed.projectDir,
+      serverUrl: serverHandle.url,
+      resolvedConfig,
+      provisioner,
+      logger: workspaceLoggerOf(schedulerLogger),
+      registry,
+      schedulerLogger,
+      defaults: wireInputDefaults,
+    });
+  } catch (e) {
+    const failure = e as RoleWiringFailure;
+    err(`Failed to wire role runner for ${failure.agentId}: ${failure.cause}`);
+    await serverHandle.abort();
+    return 1;
   }
 
   const scheduler = (deps.makeScheduler ?? createScheduler)(
@@ -451,71 +470,114 @@ export async function runServer(
   return 0;
 }
 
-interface WireEngineersInput {
-  readonly engineers: readonly AgentConfig[];
-  readonly projectId: string;
-  readonly projectName: string;
-  readonly provisioner: WorkspaceProvisioner;
-  readonly projectRepoPath: string;
-  readonly serverUrl: string;
-  readonly registry: AgentRunnerRegistry;
-  readonly schedulerLogger: SchedulerLogger;
-  readonly makeEngineerRunner?: (input: MakeEngineerRunnerInput) => AgentRunner | null;
+interface WireInputDefaults {
+  readonly mcpEntryPath: string;
+  readonly makeActivityHttpClient: (
+    serverUrl: string,
+    agentId: string,
+  ) => ActivityHttpClient;
+  readonly codingAgentCliRegistry: Readonly<Record<string, CodingAgentCliEntry>>;
 }
 
-interface EngineerWiringFailure {
+interface WireRolesInput {
+  readonly roster: readonly AgentConfig[];
+  readonly roleWires: Readonly<Record<string, WireFn>>;
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly projectRepoPath: string;
+  readonly serverUrl: string;
+  readonly resolvedConfig: ResolvedConfig;
+  readonly provisioner: WorkspaceProvisioner;
+  readonly logger: WorkspaceLogger;
+  readonly registry: AgentRunnerRegistry;
+  readonly schedulerLogger: SchedulerLogger;
+  readonly defaults: WireInputDefaults;
+}
+
+interface RoleWiringFailure {
   readonly agentId: string;
-  readonly code: string;
   readonly cause: string;
 }
 
-async function wireEngineers(input: WireEngineersInput): Promise<void> {
-  for (const agentConfig of input.engineers) {
+/**
+ * Iterate the roster in declaration order and dispatch each agent to
+ * its role's `WireFn`. Registers every non-`null` runner with the
+ * scheduler's registry; logs `runner.skipped` when a wire is missing
+ * or returns `null`. A throw inside any wire surfaces as
+ * {@link RoleWiringFailure} — `runServer` aborts the server and exits
+ * with code 1.
+ */
+async function wireRoles(input: WireRolesInput): Promise<void> {
+  for (const agentConfig of input.roster) {
     const startedAt = performance.now();
+    const wireFn = input.roleWires[agentConfig.role];
+    if (wireFn === undefined) {
+      input.schedulerLogger.log("info", "runner.skipped", {
+        agent: agentConfig.id,
+        role: agentConfig.role,
+        reason: "no_wire_registered",
+      });
+      continue;
+    }
+
+    const wireInput: WireInput = {
+      projectId: input.projectId,
+      projectName: input.projectName,
+      projectRepoPath: input.projectRepoPath,
+      serverUrl: input.serverUrl,
+      agentConfig,
+      resolvedConfig: input.resolvedConfig,
+      mcpEntryPath: input.defaults.mcpEntryPath,
+      logger: input.logger,
+      makeActivityHttpClient: input.defaults.makeActivityHttpClient,
+      codingAgentCliRegistry: input.defaults.codingAgentCliRegistry,
+      workspaceProvisioner: input.provisioner,
+    };
+
+    let runner: AgentRunner | null;
     try {
-      await input.provisioner.ensureProvisioned(
-        input.projectId,
-        agentConfig.id,
-        input.projectRepoPath,
-      );
+      runner = await wireFn(wireInput);
     } catch (cause) {
-      const code = cause instanceof WorkspaceProvisioningError
-        ? cause.code
-        : "ensure_provisioned_failed";
       const message = cause instanceof Error ? cause.message : String(cause);
-      const failure: EngineerWiringFailure = {
+      const failure: RoleWiringFailure = {
         agentId: agentConfig.id,
-        code,
         cause: message,
       };
       throw failure;
     }
+
+    if (runner === null) {
+      input.schedulerLogger.log("info", "runner.skipped", {
+        agent: agentConfig.id,
+        role: agentConfig.role,
+        reason: "wire_returned_null",
+      });
+      continue;
+    }
+
+    input.registry.register(runner);
     const elapsedMs = Math.round(performance.now() - startedAt);
-    const workspacePath = input.provisioner.workspacePathFor(
-      input.projectId,
-      agentConfig.id,
-    );
-    input.schedulerLogger.log("info", "engineer.wired", {
+    input.schedulerLogger.log("info", "runner.registered", {
       agent: agentConfig.id,
-      workspace_path: workspacePath,
+      role: runner.role,
+      workspace_path: runner.workspacePath ?? null,
       elapsed_ms: elapsedMs,
     });
-
-    if (input.makeEngineerRunner !== undefined) {
-      const runner = input.makeEngineerRunner({
-        projectId: input.projectId,
-        projectName: input.projectName,
-        agentConfig,
-        serverUrl: input.serverUrl,
-        projectRepoPath: input.projectRepoPath,
-        provisioner: input.provisioner,
-        logger: input.schedulerLogger,
-      });
-      if (runner !== null) {
-        input.registry.register(runner);
-      }
-    }
   }
+}
+
+/**
+ * Default `makeActivityHttpClient` — wraps {@link createMcpHttpClient}
+ * and exposes only the `listTickets` method required by
+ * `ActivityHttpClient`. The full `McpHttpClient` is structurally
+ * compatible (it carries `listTickets`); the cast is safe because
+ * `ActivityHttpClient` is a strict subset.
+ */
+function defaultMakeActivityHttpClient(
+  serverUrl: string,
+  agentId: string,
+): ActivityHttpClient {
+  return createMcpHttpClient({ serverUrl, agentId }) as ActivityHttpClient;
 }
 
 /**

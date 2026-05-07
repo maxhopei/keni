@@ -27,8 +27,8 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { join } from "@std/path";
-import type { CodingAgentCliEntry } from "@keni/role-runtimes";
-import { FakeWorkspaceProvisioner } from "@keni/role-runtimes/test-fakes";
+import type { CodingAgentCliEntry } from "@keni/runtime-common";
+import { FakeWorkspaceProvisioner } from "@keni/runtime-workspace/test-fakes";
 import { captureSchedulerLogger, type SchedulerLogEntry, type SchedulerLogger } from "@keni/server";
 import { runInit } from "../../../src/init/mod.ts";
 import { runStart } from "../../../src/start/mod.ts";
@@ -83,7 +83,7 @@ const itGit = (label: string, fn: () => Promise<void>) => {
 };
 
 const FAKE_CODING_AGENT_PATH = new URL(
-  "../../../role-runtimes/tests/fixtures/fake-coding-agent.ts",
+  "../../../runtime-common/tests/fixtures/fake-coding-agent.ts",
   import.meta.url,
 ).pathname;
 

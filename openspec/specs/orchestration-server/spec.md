@@ -858,43 +858,58 @@ The existing requirements covering the ticket / PR / activity / error-envelope /
 - **THEN** the request log captures one line with `path: "/events"`, `status: 400`, `error_code: "missing_role"`
 - **AND** the line carries the `request_id` echoed on the response
 
-### Requirement: `runServer` wires up the built-in engineer role runner at bootstrap
+### Requirement: `runServer` wires up role runners polymorphically via the `roleWires` registry; the server holds zero role-specific knowledge
 
-`runServer` SHALL, after constructing the scheduler but before `Deno.serve` accepts connections, instantiate a single shared `GitWorkspaceProvisioner` (from `@keni/role-runtimes`), filter the project's `agents` roster to entries whose `role` is `"engineer"`, and for each such entry: (1) call `await provisioner.ensureProvisioned(projectId, agentId, projectRepoPath)` where `projectRepoPath` is the resolved `--project` argument's absolute path; (2) construct an engineer runner via `createEngineerRunner(deps, opts)`; (3) call `scheduler.registerRunner(runner)`. `runServer` SHALL emit one info-level log line per engineer naming the agent id, the workspace path, and the elapsed provisioning time. `runServer` SHALL call `scheduler.start()` exactly once after every engineer is wired and only then SHALL `Deno.serve` accept connections. When the project's roster contains zero engineers (a future PO-only project), `runServer` SHALL skip the engineer-wiring loop entirely; this is not a failure. When `provisioner.ensureProvisioned` rejects for any single engineer, `runServer` SHALL exit with code 1 and a stderr message naming the failed agent and the underlying error code, *not* swallow the failure or skip that agent's registration.
+`runServer` SHALL accept, on its `RunServerDeps` value bag, a `roleWires: Readonly<Record<string, WireFn>>` field where `WireFn` is the type imported from `@keni/runtime-common`. After constructing the scheduler but before `Deno.serve` accepts connections, `runServer` SHALL: (1) instantiate a single shared `WorkspaceProvisioner` (concretely, `GitWorkspaceProvisioner` from `@keni/runtime-workspace`) and pass it through to every wire's `WireInput`; (2) iterate the project's `agents` roster in declaration order; (3) for each agent, look up `wireFn = roleWires[agent.role]`; (4) when `wireFn` is undefined, log one info-level `runner.skipped` line naming the agent and the missing role and proceed; (5) when `wireFn` is defined, call `await wireFn(input)` with a `WireInput` carrying `projectId`, `projectName`, `projectRepoPath`, `serverUrl`, `agentConfig`, `resolvedConfig`, `mcpEntryPath`, `logger`, `makeActivityHttpClient`, `codingAgentCliRegistry`, and the shared `workspaceProvisioner`; (6) when the wire returns a non-`null` `AgentRunner`, call `scheduler.registerRunner(runner)`; when the wire returns `null`, log one info-level `runner.skipped` line naming the agent (the wire itself has already logged the reason) and proceed; (7) when the wire throws, exit `runServer` with code 1 and a stderr message naming the failed agent and the underlying error message — wire failures are boot failures.
 
-#### Scenario: Engineer wiring runs before `Deno.serve` accepts
+`runServer` SHALL NOT import `createEngineerRunner`, `createPoRunner`, or any role-specific factory. `runServer`'s source under `packages/server/src/` SHALL contain zero `=== "engineer"`, `=== "qa"`, `=== "po"`, or `=== "writer"` literal comparisons in its boot path. `runServer` SHALL emit one info-level log line per registered runner naming the agent id, the role, the workspace path (when applicable), and the elapsed wiring time.
 
-- **WHEN** `runServer(["--project=<tempDir>", "--port=0"])` is invoked against a project whose `project.yaml` declares `agents: [{ id: "alice", role: "engineer" }]`
-- **AND** an instrumented `provisioner.ensureProvisioned` and an instrumented `Deno.serve` both record their call times
-- **THEN** `provisioner.ensureProvisioned("<projectId>", "alice", "<tempDir>")` was called exactly once
-- **AND** the call resolved before `Deno.serve` began accepting connections
+`runServer` SHALL call `scheduler.start()` exactly once after every roster entry has been processed, and only then SHALL `Deno.serve` accept connections. When `roleWires` is empty (no roles registered) or when every roster entry's wire returns `null`, `runServer` SHALL still complete bootstrap successfully — the scheduler runs with zero registered runners, every per-tick invocation logs `runner.missing` per the `scheduler` capability.
 
-#### Scenario: Engineer runner is registered on the scheduler before start
+#### Scenario: `runServer` polymorphically dispatches per-agent wiring
 
-- **WHEN** the same bootstrap completes
-- **AND** an instrumented `scheduler.registerRunner` and `scheduler.start` both record their calls in arrival order
-- **THEN** the captured array shows `registerRunner({ role: "engineer", expectedPromptName: "engineer", … })` was called exactly once
-- **AND** `scheduler.start()` was called exactly once after `registerRunner`
+- **WHEN** `runServer(deps, opts)` is invoked with `deps.roleWires = { engineer: <fakeEngineerWire>, po: <fakePoWire> }` against a project whose roster is `[{ id: "alice", role: "engineer" }, { id: "petra", role: "po" }]`
+- **AND** instrumented wires record their calls
+- **THEN** `<fakeEngineerWire>` is called exactly once with `WireInput.agentConfig.id === "alice"`
+- **AND** `<fakePoWire>` is called exactly once with `WireInput.agentConfig.id === "petra"`
+- **AND** `scheduler.registerRunner` is called exactly twice (once per non-null wire return), with the engineer runner registered before the PO runner (roster order)
+- **AND** `scheduler.start()` is called exactly once after both `registerRunner` calls
+- **AND** every captured registration call resolves before `Deno.serve` begins accepting connections
 
-#### Scenario: Engineer wiring is skipped when the roster has no engineers
+#### Scenario: Missing role wire logs `runner.skipped` and continues
 
-- **WHEN** `runServer` is invoked against a project whose `agents` roster contains exactly `[{ id: "po", role: "po" }]`
-- **THEN** `provisioner.ensureProvisioned` is called zero times
-- **AND** `scheduler.registerRunner` is called zero times for the `engineer` role
-- **AND** `runServer` returns exit code 0 on a normal shutdown
+- **WHEN** `runServer` is invoked with `deps.roleWires = { engineer: <wire> }` against a project whose roster is `[{ id: "petra", role: "po" }]` (no PO wire registered)
+- **THEN** the captured logger received exactly one info-level `runner.skipped` line naming `agent: "petra"` and `role: "po"`
+- **AND** `scheduler.registerRunner` is called zero times
+- **AND** `scheduler.start()` is called exactly once
+- **AND** `runServer` completes bootstrap successfully (no exit code 1)
 
-#### Scenario: Provisioning failure exits the server with code 1
+#### Scenario: Wire `null` return logs `runner.skipped` and continues
 
-- **WHEN** `provisioner.ensureProvisioned` rejects with `WorkspaceProvisioningError("git_clone_failed", …)` for the `alice` engineer
-- **AND** `runServer` is invoked
-- **THEN** the function returns exit code 1
-- **AND** stderr names `"alice"` and the error code `"git_clone_failed"`
+- **WHEN** the engineer wire returns `null` for `alice` (e.g., no CLI configured)
+- **THEN** the captured logger received the wire's own role-specific skip log (e.g., `engineer.runner_skipped` with `reason: "no_cli_configured"`) plus exactly one `runner.skipped` line at the runServer layer
+- **AND** `scheduler.registerRunner` is not called for `alice`
+- **AND** `runServer` completes bootstrap successfully
+
+#### Scenario: Wire throw exits `runServer` with code 1
+
+- **WHEN** the engineer wire throws `new Error("workspace clone failed")` for `alice`
+- **THEN** `runServer` returns exit code 1
+- **AND** stderr names `"alice"` and the error message
 - **AND** `scheduler.start()` is not invoked
 - **AND** `Deno.serve` is not invoked
 
+#### Scenario: `runServer`'s source is role-agnostic
+
+- **WHEN** the production source files under `packages/server/src/` (excluding `*_test.ts`) are scanned for `createEngineerRunner`, `createPoRunner`, or any other role-specific factory name
+- **THEN** zero occurrences are found
+- **AND** scanning the same files for `=== "engineer"`, `=== "qa"`, `=== "po"`, `=== "writer"` finds zero occurrences in the boot path
+
 ### Requirement: `POST /prs/:id/merge` performs a fast-forward merge of the PR's branch onto `main` and returns the merge commit SHA
 
-The orchestration server SHALL expose a new endpoint `POST /prs/:id/merge`. The endpoint SHALL: (1) require `X-Keni-Role: engineer` (rejecting any other role with `403 role_not_owner`, including `qa`, `po`, and `writer`; the `user` role override path is allowed per the existing `USER_OVERRIDE_ALLOWED` constant); (2) require an `X-Keni-Agent` header (rejecting absence with `400 missing_role` consistent with the existing role-identity middleware); (3) reject a non-empty request body with `400 validation_failed` (the PR record names the source branch — the request is identifier-only); (4) read the PR record via `PRStore.read(id)`, mapping `StoreNotFoundError` to `404 store_not_found`; (5) extract the source branch and the workspace path from the PR record (the workspace path is computed via the in-process `WorkspaceProvisioner.workspacePathFor(projectId, prRecord.author)`, where `prRecord.author` is the engineer who created the PR); (6) execute, in the project repo working directory `runServer.projectRepoPath`, the sequence `git fetch <workspacePath> <branch>:<branch>` followed by `git merge --ff-only <branch>` against `main`; (7) on `git merge --ff-only` exit code 0, read the merge commit SHA via `git rev-parse HEAD`, call `PRStore.updateStatus(id, prRecord.status, "merged")` (mapping `StaleStateError` to `409 stale_state`), call `ActivityLogStore.append(...)` with `event: "pr_merged"`, `agent: <calling agent id>`, `role: "engineer"`, `summary: "Merged PR <id> as <sha>"`, `refs: { pr_id: id, branch, merge_commit_sha: <sha> }`, and respond `200 { data: { merge_commit_sha: string }, project_id }`; (8) on `git merge --ff-only` exit code 1 (the workspace's branch tip is not a descendant of `main`'s tip), respond `409 { error: { code: "merge_conflict", message: "Branch is not a fast-forward of main", details: { branch, base: "main", git_stderr } }, project_id }` and SHALL NOT update the PR's status; (9) on any other git failure (missing branch, missing workspace, git binary unavailable), respond `400 { error: { code: "validation_failed", message: <message naming the failure mode>, details: { ... } }, project_id }`. The endpoint SHALL serialise concurrent merge attempts via a per-server in-process `Mutex` (single-writer on the project repo); concurrent requests SHALL queue and execute in arrival order with no observable interleaving.
+The orchestration server SHALL expose a new endpoint `POST /prs/:id/merge`. The endpoint SHALL: (1) require `X-Keni-Role: engineer` (rejecting any other role with `403 role_not_owner`, including `qa`, `po`, and `writer`; the `user` role override path is allowed per the existing `USER_OVERRIDE_ALLOWED` constant); (2) require an `X-Keni-Agent` header (rejecting absence with `400 missing_role` consistent with the existing role-identity middleware); (3) reject a non-empty request body with `400 validation_failed` (the PR record names the source branch — the request is identifier-only); (4) read the PR record via `PRStore.read(id)`, mapping `StoreNotFoundError` to `404 store_not_found`; (5) extract the source branch and the workspace path from the PR record (the workspace path is computed via the in-process `WorkspaceProvisioner.workspacePathFor(projectId, prRecord.author)`, where `prRecord.author` is the engineer who created the PR; the `WorkspaceProvisioner` interface is imported from `@keni/runtime-workspace`, not from any role-specific package); (6) execute, in the project repo working directory `runServer.projectRepoPath`, the sequence `git fetch <workspacePath> <branch>:<branch>` followed by `git merge --ff-only <branch>` against `main`; (7) on `git merge --ff-only` exit code 0, read the merge commit SHA via `git rev-parse HEAD`, call `PRStore.updateStatus(id, prRecord.status, "merged")` (mapping `StaleStateError` to `409 stale_state`), call `ActivityLogStore.append(...)` with `event: "pr_merged"`, `agent: <calling agent id>`, `role: "engineer"`, `summary: "Merged PR <id> as <sha>"`, `refs: { pr_id: id, branch, merge_commit_sha: <sha> }`, and respond `200 { data: { merge_commit_sha: string }, project_id }`; (8) on `git merge --ff-only` exit code 1 (the workspace's branch tip is not a descendant of `main`'s tip), respond `409 { error: { code: "merge_conflict", message: "Branch is not a fast-forward of main", details: { branch, base: "main", git_stderr } }, project_id }` and SHALL NOT update the PR's status; (9) on any other git failure (missing branch, missing workspace, git binary unavailable), respond `400 { error: { code: "validation_failed", message: <message naming the failure mode>, details: { ... } }, project_id }`. The endpoint SHALL serialise concurrent merge attempts via a per-server in-process `Mutex` (single-writer on the project repo); concurrent requests SHALL queue and execute in arrival order with no observable interleaving.
+
+`packages/server/src/routes/prs.ts` SHALL import `WorkspaceProvisioner` from `@keni/runtime-workspace` and SHALL NOT import from `@keni/runtime-engineer` or any other role-specific package.
 
 #### Scenario: Engineer fast-forward merges a clean branch
 
@@ -954,6 +969,12 @@ The orchestration server SHALL expose a new endpoint `POST /prs/:id/merge`. The 
 - **AND** the second response's `merge_commit_sha` is a descendant of the first response's `merge_commit_sha` in the project repo's `main` history
 - **AND** the activity log shows two `pr_merged` entries whose timestamps are non-overlapping (the second entry's `timestamp` is greater than or equal to the first entry's)
 
+#### Scenario: `routes/prs.ts` does not import role-specific code
+
+- **WHEN** the source of `packages/server/src/routes/prs.ts` is scanned for `from "@keni/runtime-engineer"`, `from "@keni/runtime-po"`, or `from "@keni/role-runtimes"`
+- **THEN** zero occurrences are found
+- **AND** the only `@keni/runtime-*` import is from `@keni/runtime-workspace`
+
 ### Requirement: The `ErrorCode` enum gains `merge_conflict` and the `EventName` union gains `pr_merged`
 
 The `ErrorCode` enum exported from `@keni/shared/wire/errors.ts` SHALL be extended additively to include the new code `merge_conflict`. The `EventName` union exported from `@keni/shared/wire/activity.ts` SHALL be extended additively to include the new event `pr_merged`. Both additions SHALL be backward-compatible (existing consumers that pattern-match on the enum/union SHALL continue to compile; consumers that exhaustively switch over either union SHALL gain a new case to handle, and TypeScript SHALL flag missing branches at `deno task check` time). No existing code SHALL be removed or renamed.
@@ -975,15 +996,21 @@ The `ErrorCode` enum exported from `@keni/shared/wire/errors.ts` SHALL be extend
 - **WHEN** a consumer writes a `switch (code)` that omits the `"merge_conflict"` case
 - **THEN** `deno task check` fails with a TypeScript error naming the missing case
 
-### Requirement: `runServer` constructs the workspace provisioner once per server lifecycle and shares it across handlers that need workspace paths
+### Requirement: `runServer` constructs the workspace provisioner once per server lifecycle and shares it across handlers and role wires
 
-`runServer` SHALL instantiate exactly one `GitWorkspaceProvisioner` per server invocation, *before* the engineer-wiring loop. The same instance SHALL be passed to every `createEngineerRunner` call (so all engineers share the provisioner) and SHALL be made available to the `POST /prs/:id/merge` handler via the existing `createServer(deps, opts)` deps bag (a new `workspaceProvisioner: WorkspaceProvisioner` field is added to `ServerDeps`). The provisioner SHALL NOT be reconstructed on hot-reload, request boundary, or any in-process boundary other than `runServer` exit. On `runServer` shutdown, the provisioner SHALL NOT be discarded — workspaces persist across server restarts per the engineer-runtime capability's documented lifecycle.
+`runServer` SHALL instantiate exactly one `GitWorkspaceProvisioner` per server invocation, *before* the polymorphic role-wiring loop. The `GitWorkspaceProvisioner` class and the `WorkspaceProvisioner` interface SHALL be imported from `@keni/runtime-workspace`. The same instance SHALL be passed into every `WireFn` invocation via `WireInput.workspaceProvisioner` (so any role's wire can call `ensureProvisioned(...)` with its own sparse pattern) and SHALL be made available to the `POST /prs/:id/merge` handler via the existing `createServer(deps, opts)` deps bag (a `workspaceProvisioner: WorkspaceProvisioner` field on `ServerDeps`). The provisioner SHALL NOT be reconstructed on hot-reload, request boundary, or any in-process boundary other than `runServer` exit. On `runServer` shutdown, the provisioner SHALL NOT be discarded — workspaces persist across server restarts per the `runtime-workspace` capability's documented lifecycle.
 
 #### Scenario: Exactly one provisioner is constructed per `runServer` lifecycle
 
 - **WHEN** an instrumented `GitWorkspaceProvisioner` constructor records its calls
 - **AND** `runServer(["--project=<tempDir>", "--port=0"])` is invoked, runs through bootstrap, accepts one merge request, and shuts down cleanly
 - **THEN** the constructor was called exactly once during that lifecycle
+
+#### Scenario: The provisioner is sourced from `@keni/runtime-workspace`
+
+- **WHEN** the production source of `packages/server/src/runServer.ts` is inspected for the import of `GitWorkspaceProvisioner`
+- **THEN** the import specifier is `@keni/runtime-workspace`
+- **AND** no `@keni/role-runtimes` or `@keni/runtime-engineer` import provides this symbol
 
 #### Scenario: The merge handler reads `workspaceProvisioner` from `ServerDeps`
 

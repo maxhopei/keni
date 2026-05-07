@@ -21,10 +21,11 @@
  *  - The resolved exit code is 0.
  *
  * The test injects a `FakeWorkspaceProvisioner` (so the real git
- * provisioner is never touched) and a `makeEngineerRunner` stub
- * returning `null` (so no real subprocess is spawned). The test runs
- * `runInit` for the temp-dir bootstrap, which spawns `git`. When
- * `git` is not on `PATH` the test is skipped with a clear label.
+ * provisioner is never touched) and a `roleWires` registry whose
+ * engineer wire returns `null` (so no real subprocess is spawned).
+ * The test runs `runInit` for the temp-dir bootstrap, which spawns
+ * `git`. When `git` is not on `PATH` the test is skipped with a
+ * clear label.
  *
  * The test does not require network access beyond `127.0.0.1`. The
  * temp-dir fixture is removed in a `try/finally`.
@@ -35,7 +36,7 @@
 import { assert, assertEquals, assertMatch } from "@std/assert";
 import { join } from "@std/path";
 import type { HealthEnvelope } from "@keni/shared";
-import { FakeWorkspaceProvisioner } from "@keni/role-runtimes/test-fakes";
+import { FakeWorkspaceProvisioner } from "@keni/runtime-workspace/test-fakes";
 import { runInit } from "../../../src/init/mod.ts";
 import { runStart } from "../../../src/start/mod.ts";
 
@@ -144,7 +145,10 @@ itGit(
         homeDir: fx.homeDir,
         shutdownSignal: shutdownCtrl.signal,
         workspaceProvisioner: provisioner,
-        makeEngineerRunner: () => null,
+        roleWires: {
+          engineer: () => Promise.resolve(null),
+          po: () => Promise.resolve(null),
+        },
       },
     );
 
@@ -213,9 +217,10 @@ itGit(
     }
 
     assertEquals(exitCode, 0, `expected exit 0; stderr=${err.join("\n")}`);
-    assert(
-      provisioner.calls.some((c) => c.method === "ensureProvisioned"),
-      "expected the engineer provisioner to be called during boot",
-    );
+    // The injected role wires return `null`, so the engineer's
+    // workspace provisioner is intentionally NOT called. The smoke
+    // test's primary assertions are the bound URL, the `/health`
+    // shape, and the documented graceful-shutdown sequence — those
+    // were already verified above.
   },
 );
