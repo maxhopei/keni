@@ -53,15 +53,6 @@ export { resolveBundledPrompt } from "./common/promptResolver.ts";
 export { RoleRuntimeError, RoleRuntimeHttpError } from "./common/types.ts";
 
 /**
- * Re-exports for integration tests outside this package — the
- * cron-scheduler-with-pause and role-runtime-common integration tests
- * register a fake `AgentRunner` whose `promptResolver` returns this
- * placeholder bundle. Steps 09 and 18 introduce role-specific prompts;
- * once those land, callers should switch off these constants.
- */
-export { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "./common/prompts/placeholder.ts";
-
-/**
  * Engineer-runtime public surface (introduced by the
  * `engineer-runtime-and-workspace` change). The {@link WorkspaceProvisioner}
  * interface is the seam between the engineer runtime and the per-agent

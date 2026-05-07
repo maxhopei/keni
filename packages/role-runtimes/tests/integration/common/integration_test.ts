@@ -27,7 +27,7 @@ import { runServer } from "../../../../server/src/runServer.ts";
 import {
   PLACEHOLDER_PROMPT_BODY,
   PLACEHOLDER_PROMPT_NAME,
-} from "../../../src/common/prompts/placeholder.ts";
+} from "../../fakes/common/placeholderPrompt.ts";
 import { startCycle } from "../../../src/common/startCycle.ts";
 import { createSubprocessCodingAgentInvoker } from "../../../src/common/codingAgentInvoker.ts";
 import type { RoleCycleParams } from "../../../src/common/types.ts";
@@ -278,10 +278,11 @@ async function listProductionSourceFiles(): Promise<string[]> {
       out.push(join(COMMON_DIR, entry.name));
     }
   }
-  // Walk subdirectories `prompts/` and `codingAgentClis/` as well. (Test
-  // fakes used to live under `src/common/fakes/` but moved out under
-  // tests/fakes/ as of the relocate-unit-tests-to-tests-folder change.)
-  for (const sub of ["prompts", "codingAgentClis"]) {
+  // Walk subdirectory `codingAgentClis/` as well. (The `prompts/` and
+  // `fakes/` subdirectories used to live under `src/common/` but moved
+  // out under `tests/` as part of the relocate-unit-tests-to-tests-folder
+  // change.)
+  for (const sub of ["codingAgentClis"]) {
     const dir = join(COMMON_DIR, sub);
     try {
       for await (const entry of Deno.readDir(dir)) {

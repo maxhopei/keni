@@ -14,6 +14,8 @@ export type {
 } from "./common/fakeCodingAgentInvoker.ts";
 export { createFakeCodingAgentInvoker } from "./common/fakeCodingAgentInvoker.ts";
 
+export { PLACEHOLDER_PROMPT_BODY, PLACEHOLDER_PROMPT_NAME } from "./common/placeholderPrompt.ts";
+
 export type {
   FakeWorkspaceProvisionerCall,
   FakeWorkspaceProvisionerOpts,
